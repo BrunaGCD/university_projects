@@ -8,5 +8,5 @@ Júlia Andrade - RA: 10428513
 
 ## Como Rodar Nosso Código
 
-`gcc -Wall -o atividade 01-activity.c`  
+`gcc -Wall -o 01-activity 01-activity.c`  
 `./01-activity`
