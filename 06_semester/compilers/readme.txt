@@ -14,7 +14,8 @@ nível em linguagem de máquina e tem seu processo dividido em 6 fases. Este pro
 tem como objetivo produzir as primeiras duas fases do front-end(análises léxica e
 sintática) de um compilador para a linguagem Mini Python. Para isso, fizemos a 
 montagem da gramática, das expressões regulares e do autômato finito(base para o
-analisador léxico) e do código utilizando a linguagem C.
+analisador léxico) e do código (analisador léxico e sintático) utilizando a
+linguagem C.
 
 --------------------------------------------------------------------------------
 2. COMO COMPILAR E EXECUTAR
