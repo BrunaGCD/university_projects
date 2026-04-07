@@ -49,6 +49,7 @@ typedef struct {
 
 // Variáveis globais
 FILE *fonte;
+FILE *saida;
 int linhaAtual = 1;
 
 // -------------------------------------------------------------------------------
@@ -59,9 +60,11 @@ int linhaAtual = 1;
 void imprime_token(TInfoAtomo token) {
     if (token.tipo == ERRO) {
         printf("ERRO LÉXICO: linha %d - %s\n", token.linha, token.lexema);
+        fprintf(saida, "ERRO LÉXICO: linha %d - %s\n", token.linha, token.lexema);
         exit(1);
     } else if (token.tipo != EOS) {
         printf("%d# %d | %s\n", token.linha, token.tipo, token.lexema);
+        fprintf(saida, "%d# %d | %s\n", token.linha, token.tipo, token.lexema);
     }
 }
 
@@ -531,6 +534,14 @@ int main(int argc, char *argv[]) {
         printf("Erro ao abrir o arquivo.\n");
         return 1;
     }
+
+    // Cria o arquivo de saída
+    saida = fopen("tokens.txt", "w");
+    if (saida == NULL) {
+        printf("Erro ao criar arquivo de tokens do analisador lexico.\n");
+        return 1;
+    }
+    
     // Inicia o sintático
     lookahead = obter_atomo();
     codigo();
