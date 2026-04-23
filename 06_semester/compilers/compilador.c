@@ -11,6 +11,8 @@ Júlia Andrade - RA: 10428513
 #include <string.h>
 #include <ctype.h>
 
+
+
 // ===============================================================================
 //                                     GLOBAIS
 // ===============================================================================
@@ -29,6 +31,7 @@ typedef enum {
     // Palavras reservadas
     IF, ELSE, WHILE, FOR, IN, RANGE, PRINT,
     INPUT, LEN, AND, OR, NOT, IS, DEF, RETURN,
+    BREAK, EXEC, RAISE,
     
     // Operadores
     ATRIBUICAO, SOMA, SUB, MULT, DIV, MOD, EXP, BIT_NOT,
@@ -52,9 +55,91 @@ FILE *fonte;
 FILE *saida;
 int linhaAtual = 1;
 
+TInfoAtomo lista_identificadores[100];
+int total_identificadores = 0;
+
+
+
 // -------------------------------------------------------------------------------
 //                    FUNÇÕES AUXILIARES DO ANALISADOR LÉXICO
 // -------------------------------------------------------------------------------
+
+// Função para auxiliar a definir se um lexema é token NUMERO
+int eh_numero(const char *str) {
+    for (int i = 0; str[i] != '\0'; i++) {
+        if (!isdigit(str[i])) {
+            return 0;                             // Não é um número se encontrar um caractere que não seja dígito
+        }
+    }
+    return 1;                                     // É um número se todos os caracteres forem dígitos
+}
+
+int eh_identificador(const char *str) {
+    if (!isalpha(str[0]) && str[0] != '_') {      // Identificadores devem começar com letra ou underscore
+        return 0;
+    }
+    for (int i = 1; str[i] != '\0'; i++) {        // O restante dos caracteres podem ser letras, dígitos ou underscores
+        if (!isalnum(str[i]) && str[i] != '_') {
+            return 0;                             // Não é um identificador se encontrar um caractere inválido
+        }
+    }
+    return 1;                                     // É um identificador válido
+}
+
+// Função para auxiliar impressão do tipo do token
+char* retorna_string_tipo(TAtomo tipo) {
+    if (tipo == ERRO) return "ERRO";
+    else if (tipo == EOS) return "EOS";
+    else if (tipo == NUMERO) return "NUMERO";
+    else if (tipo == BOOLEANO) return "BOOLEANO";
+    else if (tipo == STRING) return "STRING";
+    else if (tipo == IDENTIFICADOR) return "IDENTIFICADOR";
+    else if (tipo == IF) return "IF";
+    else if (tipo == ELSE) return "ELSE";
+    else if (tipo == WHILE) return "WHILE";
+    else if (tipo == FOR) return "FOR";
+    else if (tipo == IN) return "IN";
+    else if (tipo == RANGE) return "RANGE";
+    else if (tipo == PRINT) return "PRINT";
+    else if (tipo == INPUT) return "INPUT";
+    else if (tipo == LEN) return "LEN";
+    else if (tipo == AND) return "AND";
+    else if (tipo == OR) return "OR";
+    else if (tipo == NOT) return "NOT";
+    else if (tipo == IS) return "IS";
+    else if (tipo == DEF) return "DEF";
+    else if (tipo == RETURN) return "RETURN";
+    else if (tipo == BREAK) return "BREAK";
+    else if (tipo == EXEC) return "EXEC";
+    else if (tipo == RAISE) return "RAISE";
+    else if (tipo == ATRIBUICAO) return "ATRIBUICAO";
+    else if (tipo == SOMA) return "SOMA";
+    else if (tipo == SUB) return "SUB";
+    else if (tipo == MULT) return "MULT";
+    else if (tipo == DIV) return "DIV";
+    else if (tipo == MOD) return "MOD";
+    else if (tipo == EXP) return "EXP";
+    else if (tipo == BIT_NOT) return "BIT_NOT";
+    else if (tipo == IGUAL) return "IGUAL";
+    else if (tipo == DIFERENTE) return "DIFERENTE"; // PS: Tanto '!=' quanto'<>' são considerados operadores de diferente
+    else if (tipo == MENOR) return "MENOR";
+    else if (tipo == MAIOR) return "MAIOR";
+    else if (tipo == MENOR_IGUAL) return "MENOR_IGUAL";
+    else if (tipo == MAIOR_IGUAL) return "MAIOR_IGUAL";
+    else if (tipo == IS) return "IS";
+    else if (tipo == IN) return "IN";
+    else if (tipo == DOIS_PONTOS) return "DOIS_PONTOS";
+    else if (tipo == PONTO) return "PONTO";
+    else if (tipo == VIRGULA) return "VIRGULA";
+    else if (tipo == PONTO_VIRGULA) return "PONTO_VIRGULA";
+    else if (tipo == ABRE_PAR) return "ABRE_PAR";
+    else if (tipo == FECHA_PAR) return "FECHA_PAR";
+    else if (tipo == ABRE_COL) return "ABRE_COL";
+    else if (tipo == FECHA_COL) return "FECHA_COL";
+    else if (tipo == ABRE_CHAVE) return "ABRE_CHAVE";
+    else if (tipo == FECHA_CHAVE) return "FECHA_CHAVE";
+    else return "DESCONHECIDO";
+}
 
 // Função para imprimir os tokens ou erros léxicos
 void imprime_token(TInfoAtomo token) {
@@ -63,47 +148,37 @@ void imprime_token(TInfoAtomo token) {
         fprintf(saida, "ERRO LÉXICO: linha %d - %s\n", token.linha, token.lexema);
         exit(1);
     } else if (token.tipo != EOS) {
-        printf("%d# %d | %s\n", token.linha, token.tipo, token.lexema);
-        fprintf(saida, "%d# %d | %s\n", token.linha, token.tipo, token.lexema);
+        if (token.tipo == IDENTIFICADOR) {                                    // Se for o token for um identificador,
+            int id = 0;
+            for (int i = 0; i < total_identificadores; i++) {                 // Percorro a lista de identificadores
+                if (strcmp(lista_identificadores[i].lexema, token.lexema) == 0) {   // Pego o ID do identificador para impressão (sendo o ID sempre o index na lista)
+                    id = i + 1;
+                    break;
+                }
+            }
+            printf("%d# IDENTIFICADOR | var %d\n", token.linha, id);          // Impressão especial para identificador
+            fprintf(saida, "%d# IDENTIFICADOR | var %d\n", token.linha, id);
+        } else {                                                              // Realiza a impressão normal para qualquer outro tipo de token
+            printf("%d# %s | %s\n", token.linha, retorna_string_tipo(token.tipo), token.lexema);
+            fprintf(saida, "%d# %s | %s\n", token.linha, retorna_string_tipo(token.tipo), token.lexema);
+        }
     }
-}
-
-// Função auxiliar para espiar o próximo caractere sem consumi-lo
-char peek() {
-    char c = fgetc(fonte);
-    ungetc(c, fonte);
-    return c;
-}
-
-// Verifica se é palavra reservada, booleano ou identificador
-TAtomo classificar_palavra_ou_id(char *lexema) {
-    if (strcmp(lexema, "True") == 0 || strcmp(lexema, "False") == 0) return BOOLEANO;
-    if (strcmp(lexema, "if") == 0) return IF;
-    if (strcmp(lexema, "else") == 0) return ELSE;
-    if (strcmp(lexema, "while") == 0) return WHILE;
-    if (strcmp(lexema, "for") == 0) return FOR;
-    if (strcmp(lexema, "in") == 0) return IN;
-    if (strcmp(lexema, "range") == 0) return RANGE;
-    if (strcmp(lexema, "print") == 0) return PRINT;
-    if (strcmp(lexema, "input") == 0) return INPUT;
-    if (strcmp(lexema, "len") == 0) return LEN;
-    if (strcmp(lexema, "and") == 0) return AND;
-    if (strcmp(lexema, "or") == 0) return OR;
-    if (strcmp(lexema, "not") == 0) return NOT;
-    if (strcmp(lexema, "is") == 0) return IS;
-    if (strcmp(lexema, "def") == 0) return DEF;
-    if (strcmp(lexema, "return") == 0) return RETURN;
-    return IDENTIFICADOR;
 }
 
 // ===============================================================================
 //                               ANALISADOR LÉXICO
 // ===============================================================================
 TInfoAtomo obter_atomo() {
+
+    // ---------------------------- INICIALIZA TOKEN A SER IDENTIFICADO -----------------------------
+
     TInfoAtomo token;
-    token.lexema[0] = '\0';
     char c;
     int i = 0;
+    token.lexema[0] = '\0';
+
+
+    // --------------- EVITA QUEBRA DE LINHA, ESPAÇOS, COMENTÁRIOS E FINAL DO ARQUIVO ---------------
 
     while ((c = fgetc(fonte)) != EOF) {
         // Ignorar espaços e quebras de linha
@@ -120,128 +195,120 @@ TInfoAtomo obter_atomo() {
             continue;
         }
 
-        // Identificadores e Palavras Reservadas
-        if (isalpha(c) || c == '_') {
-            token.lexema[i++] = c;                     // Inicia o lexema com a letra ou underscore
-            while (isalnum(peek()) || peek() == '_') { // isalnum() = letra ou dígito
-                token.lexema[i++] = fgetc(fonte);      // Lê o caractere e avança
-            }
-            token.lexema[i] = '\0';                    // Finaliza o lexema
-            token.tipo = classificar_palavra_ou_id(token.lexema); // Classifica como palavra reservada, booleano ou identificador
-            token.linha = linhaAtual;                  // Define a linha do token
-            imprime_token(token);
-            return token;
-        }
+        break;
+    }
 
-        // Números
-        if (isdigit(c)) {
-            token.lexema[i++] = c;                     // Inicia o lexema com o dígito
-            while (isdigit(peek())) {                  // Enquanto o próximo caractere for dígito
-                token.lexema[i++] = fgetc(fonte);      // Lê o caractere e avança
-            }
-            token.lexema[i] = '\0';                    // Finaliza o lexema
-            token.tipo = NUMERO;                       // Classifica como número
-            token.linha = linhaAtual;                  // Define a linha do token
-            imprime_token(token);
-            return token;
-        }
-
-        // Strings
-        if (c == '"' || c == '\'') {
-            char delimitador = c;
-            token.lexema[i++] = c;                     // Inicia o lexema com a aspa
-            while ((c = fgetc(fonte)) != delimitador && c != EOF) { // Lê até encontrar a aspa de fechamento ou EOF
-                token.lexema[i++] = c;                 // Adiciona o caractere ao lexema
-            }
-            if (c == delimitador) token.lexema[i++] = c; // Consome a aspa de fechamento se for encontrada
-            token.lexema[i] = '\0';                    // Finaliza o lexema
-            token.tipo = STRING;                       // Classifica como string
-            token.linha = linhaAtual;                  // Define a linha do token
-            imprime_token(token);
-            return token;
-        }
-
-        // Operadores (Se não foi nenhum acima, é um operador ou delimitador)
-        token.lexema[i++] = c;                         // Inicia o lexema com o operador ou delimitador
-        token.linha = linhaAtual;                      // Define a linha do token
-
-        if (c == '=') {
-            if (peek() == '=') {
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = IGUAL;
-            } 
-            else {
-                token.tipo = ATRIBUICAO;
-            }
-        } else if (c == '!') {
-            if (peek() == '=') {
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = DIFERENTE;
-            }
-            else {
-                token.tipo = ERRO;     // Não existe '!' sozinho, então é erro
-            }
-        } else if (c == '<') {
-            if (peek() == '=') {
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = MENOR_IGUAL;
-            }
-            else if (peek() == '>') {  // Caso seja <>
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = DIFERENTE;
-            }
-            else {
-                token.tipo = MENOR;
-            }
-        } else if (c == '>') {
-            if (peek() == '=') {
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = MAIOR_IGUAL;
-            }
-            else {
-                token.tipo = MAIOR;
-            }
-        } else if (c == '*') {
-            if (peek() == '*') {
-                token.lexema[i++] = fgetc(fonte);
-                token.tipo = EXP; }
-            else {
-                token.tipo = MULT;
-            }
-        } else if (c == '+') { token.tipo = SOMA;
-        } else if (c == '-') { token.tipo = SUB;
-        } else if (c == '/') { token.tipo = DIV;
-        } else if (c == '%') { token.tipo = MOD;
-        } else if (c == '~') { token.tipo = BIT_NOT;
-
-        // Delimitadores
-        } else if (c == ':') { token.tipo = DOIS_PONTOS;
-        } else if (c == '.') { token.tipo = PONTO;
-        } else if (c == ',') { token.tipo = VIRGULA;
-        } else if (c == ';') { token.tipo = PONTO_VIRGULA;
-        } else if (c == '(') { token.tipo = ABRE_PAR;
-        } else if (c == ')') { token.tipo = FECHA_PAR;
-        } else if (c == '[') { token.tipo = ABRE_COL;
-        } else if (c == ']') { token.tipo = FECHA_COL;
-        } else if (c == '{') { token.tipo = ABRE_CHAVE;
-        } else if (c == '}') { token.tipo = FECHA_CHAVE;
-        } else {
-            token.tipo = ERRO;         // Se não for nenhum dos casos acima, é um token inválido
-        }
-
-        token.lexema[i] = '\0';        // Finaliza o lexema
+    if (c == EOF) {                                         // Token de final do arquivo
+        token.tipo = EOS;
+        strcpy(token.lexema, "EOF");
+        token.linha = linhaAtual;
         imprime_token(token);
         return token;
     }
 
-    token.tipo = EOS;                  // Se chegou aqui, é porque encontrou EOF
-    strcpy(token.lexema, "EOF");
+    // ----------------------- CASO ESPECIAL: STRINGS (ESPAÇOS SÃO INCLUSOS) ------------------------
+
+    if (c == '"' || c == '\'') {                            // Se for aspas duplas (") ou simples (') é o início de uma string
+        char delimitador = c;                               // Se a string começar com ("), ela termina com ("). Se começar com ('), ela termina com (')
+        token.lexema[i++] = c;                              // Inicia o lexema com a aspa inicial da string
+        while ((c = fgetc(fonte)) != delimitador && c != EOF) { // Enquanto não encontrar a aspa final ou o final do arquivo,
+            token.lexema[i++] = c;                          // Monta lexema da string
+        }
+        if (c == EOF) {                                     // Se chegou no final do arquivo sem encontrar a aspa final, é um erro léxico
+            token.tipo = ERRO;
+            strcpy(token.lexema, "String não fechada");
+            token.linha = linhaAtual;
+            imprime_token(token);
+            return token;
+        }
+        token.lexema[i++] = c;                              // Adiciona a aspa final do lexema
+        token.lexema[i] = '\0';                             // Finaliza o lexema
+        token.tipo = STRING;
+        token.linha = linhaAtual;
+        imprime_token(token);
+        return token;
+    }
+
+    // ----------------------------- MONTA LEXEMA ATÉ ENCONTRAR ESPAÇO ------------------------------
+    token.lexema[i++] = c;                                  // Inicia lexema com caractere atual (já se sabe que não é um espaço)
+    while ((c = fgetc(fonte)) != EOF && !isspace(c)) {      // Monta lexema até encontrar o final do arquivo ou um espaço
+        token.lexema[i++] = c;
+    }
+    token.lexema[i] = '\0';                                 // Finaliza o lexema
     token.linha = linhaAtual;
+
+    // -------------------------------------- CLASSIFICA TOKEN --------------------------------------
+
+    if (strcmp(token.lexema, "if") == 0) token.tipo = IF;
+    else if (strcmp(token.lexema, "else") == 0) token.tipo = ELSE;
+    else if (strcmp(token.lexema, "while") == 0) token.tipo = WHILE;
+    else if (strcmp(token.lexema, "for") == 0) token.tipo = FOR;
+    else if (strcmp(token.lexema, "in") == 0) token.tipo = IN;
+    else if (strcmp(token.lexema, "range") == 0) token.tipo = RANGE;
+    else if (strcmp(token.lexema, "print") == 0) token.tipo = PRINT;
+    else if (strcmp(token.lexema, "input") == 0) token.tipo = INPUT;
+    else if (strcmp(token.lexema, "len") == 0) token.tipo = LEN;
+    else if (strcmp(token.lexema, "and") == 0) token.tipo = AND;
+    else if (strcmp(token.lexema, "or") == 0) token.tipo = OR;
+    else if (strcmp(token.lexema, "not") == 0) token.tipo = NOT;
+    else if (strcmp(token.lexema, "is") == 0) token.tipo = IS;
+    else if (strcmp(token.lexema, "def") == 0) token.tipo = DEF;
+    else if (strcmp(token.lexema, "return") == 0) token.tipo = RETURN;
+    else if (strcmp(token.lexema, "break") == 0) token.tipo = BREAK;
+    else if (strcmp(token.lexema, "exec") == 0) token.tipo = EXEC;
+    else if (strcmp(token.lexema, "raise") == 0) token.tipo = RAISE;
+    else if (strcmp(token.lexema, "=") == 0) token.tipo = ATRIBUICAO;
+    else if (strcmp(token.lexema, "+") == 0) token.tipo = SOMA;
+    else if (strcmp(token.lexema, "-") == 0) token.tipo = SUB;
+    else if (strcmp(token.lexema, "*") == 0) token.tipo = MULT;
+    else if (strcmp(token.lexema, "/") == 0) token.tipo = DIV;
+    else if (strcmp(token.lexema, "%") == 0) token.tipo = MOD;
+    else if (strcmp(token.lexema, "**") == 0) token.tipo = EXP;
+    else if (strcmp(token.lexema, "~") == 0) token.tipo = BIT_NOT;
+    else if (strcmp(token.lexema, "==") == 0) token.tipo = IGUAL;
+    else if (strcmp(token.lexema, "!=") == 0 || strcmp(token.lexema, "<>") == 0) token.tipo = DIFERENTE; // PS: Tanto '!=' quanto'<>' são considerados operadores de delse iferente
+    else if (strcmp(token.lexema, "<") == 0) token.tipo = MENOR;
+    else if (strcmp(token.lexema, ">") == 0) token.tipo = MAIOR;
+    else if (strcmp(token.lexema, "<=") == 0) token.tipo = MENOR_IGUAL;
+    else if (strcmp(token.lexema, ">=") == 0) token.tipo = MAIOR_IGUAL;
+    else if (strcmp(token.lexema, ":") == 0) token.tipo = DOIS_PONTOS;
+    else if (strcmp(token.lexema, ".") == 0) token.tipo = PONTO;
+    else if (strcmp(token.lexema, ",") == 0) token.tipo = VIRGULA;
+    else if (strcmp(token.lexema, ";") == 0) token.tipo = PONTO_VIRGULA;
+    else if (strcmp(token.lexema, "(") == 0) token.tipo = ABRE_PAR;
+    else if (strcmp(token.lexema, ")") == 0) token.tipo = FECHA_PAR;
+    else if (strcmp(token.lexema, "[") == 0) token.tipo = ABRE_COL;
+    else if (strcmp(token.lexema, "]") == 0) token.tipo = FECHA_COL;
+    else if (strcmp(token.lexema, "{") == 0) token.tipo = ABRE_CHAVE;
+    else if (strcmp(token.lexema, "}") == 0) token.tipo = FECHA_CHAVE;
+    else if (strcmp(token.lexema, "True") == 0 || strcmp(token.lexema, "False") == 0) token.tipo = BOOLEANO;
+    else if (eh_numero(token.lexema)) token.tipo = NUMERO;
+    else if (eh_identificador(token.lexema)) token.tipo = IDENTIFICADOR;
+    else token.tipo = ERRO; // Se não se encaixar em nenhum dos casos anteriores, é um erro léxico
+
+    // -------------------------- CASO ESPECIAL: TOKEN É UM IDENTIFICADOR ---------------------------
+
+    if (token.tipo == IDENTIFICADOR) {                      // No caso de ser identificador, é guardado num array para associà-lo à um ID
+        int flag = 0;
+        for (int j = 0; j < total_identificadores; j++) {   // Verifica se identificador já foi guardado antes 
+            if (strcmp(lista_identificadores[j].lexema, token.lexema) == 0) {
+                flag = 1;
+                break;
+            }
+        }
+        if (!flag) {                                        // Se não foi guardado ainda, guarda o identificador
+            if (total_identificadores < 100) {
+                lista_identificadores[total_identificadores] = token; // Guarda o identificador
+                total_identificadores++;
+            }
+        }
+    }
+
+    // ---------------------------------- IMPRIME E RETORNA TOKEN -----------------------------------
+
     imprime_token(token);
     return token;
 }
-
-
 
 
 // ===============================================================================
@@ -252,25 +319,59 @@ TInfoAtomo obter_atomo() {
 TInfoAtomo lookahead;
 
 // Protótipos das funções (necessário porque elas chamam umas às outras)
-void codigo();
 void lista_instrucoes();
 void instrucao();
+void iff();
+void whilee();
+void forr();
+void print();
+void def();
+void exec();
+void breakk();
+void raise();
+void identificadores();
+void lista_imprimivel();
+void chama_id();
+void lista_argumentos();
 void expressao();
 void exp_or();
 void exp_and();
-void exp_relacional();
+void exp_comp();
 void exp_aritmetica();
 void termo();
 void fator();
 void primario();
-void lista_argumentos();
-void lista_imprimivel();
 void lista_declaracao();
+void op_comp();
+void op_soma();
+void op_mult();
+void op_unico();
+void tupla();
+void tupla_aux();
+void exp_aritmetica_aux();
+void if_aux();
+void lista_instrucoes_aux();
+void def_aux();
+void raise_aux();
+void lista_declaracao_aux();
+void print_aux();
+void lista_ids();
+void lista_ids_aux();
+void lista_imprimivel_aux();
+void chama_id_aux();
+void chamada_funcao_aux();
+void identificadores_aux();
+void lista_argumentos_aux();
+void exp_or_aux();
+void exp_and_aux();
+void exp_comp_aux();
+void termo_aux();
+void tupla_fim();
 
 // Função de erro sintático
 void erro_sintatico(const char *msg) {
     printf("ERRO SINTATICO: linha %d - %s (token atual: %s)\n", lookahead.linha, msg, lookahead.lexema);
-    exit(1); // Para no primeiro erro
+    exit(1);
 }
 
 // Função consome: verifica se o token atual é o esperado e avança para o próximo
@@ -282,272 +383,481 @@ void consome(TAtomo esperado) {
     }
 }
 
-// (INÍCIO) -> CODIGO
-void codigo() {
-    lista_instrucoes();
-    if (lookahead.tipo != EOS) {
-        erro_sintatico("Código extra no final do arquivo");
-    }
+void lista_instrucoes() {                            // LISTA_INSTRUCOES -> INSTRUCAO LISTA_INSTRUCOES_AUX
+    instrucao();
+    lista_instrucoes_aux();
 }
 
-// LISTA_INSTRUCOES -> INSTRUCAO | INSTRUCAO LISTA_INSTRUCOES
-void lista_instrucoes() {
-    // Fica em loop enquanto o token atual for o início de uma instrução válida
-    while (lookahead.tipo == IDENTIFICADOR || lookahead.tipo == IF || lookahead.tipo == WHILE || lookahead.tipo == FOR || lookahead.tipo == PRINT || lookahead.tipo == LEN) {
-        instrucao();
+void lista_instrucoes_aux() {                        // LISTA_INSTRUCOES_AUX -> LISTA_INSTRUCOES | ε
+    if (lookahead.tipo == IDENTIFICADOR || lookahead.tipo == IF || lookahead.tipo == WHILE || lookahead.tipo == FOR || lookahead.tipo == PRINT || lookahead.tipo == LEN || lookahead.tipo == DEF || lookahead.tipo == EXEC || lookahead.tipo == BREAK || lookahead.tipo == RAISE) {
+        lista_instrucoes();                          // LISTA_INSTRUCOES_AUX -> LISTA_INSTRUCOES
     }
+    //                                               // LISTA_INSTRUCOES_AUX -> ε
 }
 
-// INSTRUCAO -> ATRIBUICAO | IF | WHILE | FOR | PRINT | CHAMADA_FUNCAO
-void instrucao() {
-    if (lookahead.tipo == IF) { // IF -> if EXPRESSAO ':' INSTRUCAO
-        consome(IF);
-        expressao();
-        consome(DOIS_PONTOS);
-        instrucao();
-        if (lookahead.tipo == ELSE) { // IF -> if EXPRESSAO ':' INSTRUCAO ELSE ':' INSTRUCAO
-            consome(ELSE);
-            consome(DOIS_PONTOS);
-            instrucao();
-        }
-    } else if (lookahead.tipo == WHILE) { // WHILE -> while EXPRESSAO ':' INSTRUCAO
-        consome(WHILE);
-        expressao();
-        consome(DOIS_PONTOS);
-        instrucao();
-    } else if (lookahead.tipo == FOR) { // FOR -> for IDENTIFICADOR in range '(' EXPRESSAO ')' ':' INSTRUCAO
-        consome(FOR);
-        consome(IDENTIFICADOR);
-        consome(IN);
-        consome(RANGE);
-        consome(ABRE_PAR);
-        expressao();
-        consome(FECHA_PAR);
-        consome(DOIS_PONTOS);
-        instrucao();
-    } else if (lookahead.tipo == PRINT) { // PRINT
-        consome(PRINT);
-        consome(ABRE_PAR);
-        if (lookahead.tipo != FECHA_PAR) { // PRINT -> print '(' LISTA_IMPRIMIVEL ')'
-            lista_imprimivel();
-        }
-        consome(FECHA_PAR);             // PRINT -> print '(' ')'
-    } else if (lookahead.tipo == LEN) { // CHAMADA_FUNCAO: len '(' IDENTIFICADOR ')'
-        consome(LEN);
-        consome(ABRE_PAR);
-        consome(IDENTIFICADOR);
-        consome(FECHA_PAR);
-    } else if (lookahead.tipo == IDENTIFICADOR) { // CHAMADA_FUNCAO ou ATRIBUICAO ou VARIAVEL
-        consome(IDENTIFICADOR);
-        
-        if (lookahead.tipo == ATRIBUICAO) { // ATRIBUICAO
-            consome(ATRIBUICAO);
-            if (lookahead.tipo == INPUT) {
-                consome(INPUT);
-                consome(ABRE_PAR);
-                if (lookahead.tipo == STRING) consome(STRING); // ATRIBUICAO -> VARIAVEL '=' input '(' STRING ')'
-                consome(FECHA_PAR);    // ATRIBUICAO -> VARIAVEL '=' input '(' ')'
-            } else {
-                expressao();
-            }
-        } else if (lookahead.tipo == ABRE_COL) { // VARIAVEL -> IDENTIFICADOR '[' EXPRESSAO ']'
-            consome(ABRE_COL);
-            expressao();
-            consome(FECHA_COL);
-            consome(IGUAL);
-            expressao();
-        } else if (lookahead.tipo == ABRE_PAR) { // CHAMADA_FUNCAO
-            consome(ABRE_PAR);
-            if (lookahead.tipo != FECHA_PAR) {  // CHAMADA_FUNCAO -> IDENTIFICADOR '(' LISTA_ARGUMENTOS ')'
-                lista_argumentos();
-            }
-            consome(FECHA_PAR);                 // CHAMADA_FUNCAO -> IDENTIFICADOR '(' ')'
-        } else {
-            erro_sintatico("Instrução inválida após identificador");
-        }
+void instrucao() {                                   // INSTRUCAO -> IDENTIFICADORES | PRINT | BREAK | EXEC | RAISE | DEF | IF | WHILE | FOR
+    if (lookahead.tipo == IDENTIFICADOR) {
+        identificadores();
+    } else if (lookahead.tipo == PRINT) {
+        print();
+    } else if (lookahead.tipo == BREAK) {
+        breakk();
+    } else if (lookahead.tipo == EXEC) {
+        exec();
+    } else if (lookahead.tipo == RAISE) {
+        raise();
+    } else if (lookahead.tipo == DEF) {
+        def();
+    } else if (lookahead.tipo == IF) {
+        iff();
+    } else if (lookahead.tipo == WHILE) {
+        whilee();
+    } else if (lookahead.tipo == FOR) {
+        forr();
     } else {
-        erro_sintatico("Instrução não reconhecida");
+        erro_sintatico("Instrução não reconhecida"); // ERRO SINTÁTICO
     }
 }
 
-// LISTA_IMPRIMIVEL -> EXPRESSAO | EXPRESSAO ',' LISTA_IMPRIMIVEL
-void lista_imprimivel() {
-    expressao();                           // LISTA_IMPRIMIVEL -> EXPRESSAO
-    while (lookahead.tipo == VIRGULA) {    // LISTA_IMPRIMIVEL -> EXPRESSAO ',' LISTA_IMPRIMIVEL
-        consome(VIRGULA);
+void breakk() {                                      // BREAK -> break
+    consome(BREAK);
+}
+
+void def() {                                         // DEF -> def IDENTIFICADOR '(' DEF_AUX
+    consome(DEF);
+    consome(IDENTIFICADOR);
+    consome(ABRE_PAR);
+    def_aux();
+}
+
+void def_aux() {                                     // DEF_AUX -> LISTA_IDS ')' ':' INSTRUCAO | ')' ':' INSTRUCAO
+    if (lookahead.tipo == IDENTIFICADOR) {
+        lista_ids();
+        consome(FECHA_PAR);
+        consome(DOIS_PONTOS);
+        instrucao();
+    } else if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
+        consome(DOIS_PONTOS);
+        instrucao();
+    } else {
+        erro_sintatico("Esperado ')' ou identificador"); // ERRO SINTÁTICO
+    }
+}
+
+void exec() {                                        // EXEC -> exec '(' EXPRESSAO ')'
+    consome(EXEC);
+    consome(ABRE_PAR);
+    expressao();
+    consome(FECHA_PAR);
+}
+
+void raise() {                                       // RAISE -> raise RAISE_AUX
+    consome(RAISE);
+    raise_aux();
+}
+
+void raise_aux() {                                   // RAISE_AUX -> EXPRESSAO | ε
+    if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
         expressao();
     }
+    //                                               // RAISE_AUX -> ε
 }
 
-// LISTA_ARGUMENTOS -> EXPRESSAO | EXPRESSAO ',' LISTA_ARGUMENTOS
-void lista_argumentos() {
-    expressao();                          // LISTA_ARGUMENTOS -> EXPRESSAO
-    while (lookahead.tipo == VIRGULA) {   // LISTA_ARGUMENTOS -> EXPRESSAO ',' LISTA_ARGUMENTOS
-        consome(VIRGULA);
-        expressao();
+void print() {                                       // PRINT -> print '(' PRINT_AUX
+    consome(PRINT);
+    consome(ABRE_PAR);
+    print_aux();
+}
+
+void print_aux() {                                   // PRINT_AUX -> ')' | LISTA_IMPRIMIVEL ')'
+    if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+        lista_imprimivel();
+        consome(FECHA_PAR);
+    } else {
+        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
     }
 }
 
-// EXPRESSAO -> EXP_OR
-void expressao() {
+void iff(){                                          // IF -> if EXPRESSAO ':' INSTRUCAO IF_AUX
+    consome(IF);
+    expressao();
+    consome(DOIS_PONTOS);
+    instrucao();
+    if_aux();
+}
+
+void if_aux() {                                      // IF_AUX -> else ':' INSTRUCAO | ε
+    if (lookahead.tipo == ELSE) {
+        consome(ELSE);
+        consome(DOIS_PONTOS);
+        instrucao();
+    }
+    //                                              // IF_AUX -> ε
+}
+
+void whilee() {                                     // WHILE -> while EXPRESSAO ':' INSTRUCAO
+    consome(WHILE);
+    expressao();
+    consome(DOIS_PONTOS);
+    instrucao();
+}
+
+void forr() {                                       // FOR -> for IDENTIFICADOR in range '(' EXPRESSAO ')' ':' INSTRUCAO
+    consome(FOR);
+    consome(IDENTIFICADOR);
+    consome(IN);
+    consome(RANGE);
+    consome(ABRE_PAR);
+    expressao();
+    consome(FECHA_PAR);
+    consome(DOIS_PONTOS);
+    instrucao();
+}
+
+void identificadores() {                            // IDENTIFICADORES -> IDENTIFICADOR IDENTIFICADORES_AUX
+    consome(IDENTIFICADOR);
+    identificadores_aux();
+}
+
+void identificadores_aux() {                        // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX)
+    if (lookahead.tipo == ATRIBUICAO) {
+        consome(ATRIBUICAO);
+        expressao();
+    } else if (lookahead.tipo == ABRE_COL) {
+        consome(ABRE_COL);
+        expressao();
+        consome(FECHA_COL);
+        consome(IGUAL);
+        expressao();
+    } else if (lookahead.tipo == ABRE_PAR) {
+        consome(ABRE_PAR);
+        chamada_funcao_aux();
+    } else {
+        erro_sintatico("Esperado '=', '[' ou '('"); // ERRO SINTÁTICO
+    }
+}
+
+void chamada_funcao_aux() {                         // CHAMADA_FUNCAO_AUX -> ')' | LISTA_ARGUMENTOS ')'
+    if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+        lista_argumentos();
+        consome(FECHA_PAR);
+    } else {
+        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
+    }
+}
+
+void lista_ids() {                                  // LISTA_IDS -> IDENTIFICADOR LISTA_IDS_AUX
+    consome(IDENTIFICADOR);
+    lista_ids_aux();
+}
+
+void lista_ids_aux() {                              // LISTA_IDS_AUX -> ',' LISTA_IDS | ε
+    if (lookahead.tipo == VIRGULA) {
+        consome(VIRGULA);
+        lista_ids();
+    }
+    //                                              // LISTA_IDS_AUX -> ε
+}
+
+void lista_imprimivel() {                           // LISTA_IMPRIMIVEL -> EXPRESSAO LISTA_IMPRIMIVEL_AUX
+    expressao();
+    lista_imprimivel_aux();
+}
+
+void lista_imprimivel_aux() {                       // LISTA_IMPRIMIVEL_AUX -> ',' LISTA_IMPRIMIVEL | ε
+    if (lookahead.tipo == VIRGULA) {
+        consome(VIRGULA);
+        lista_imprimivel();
+    }
+    //                                              // LISTA_IMPRIMIVEL_AUX -> ε
+}
+
+void lista_argumentos() {                           // LISTA_ARGUMENTOS -> EXPRESSAO LISTA_ARGUMENTOS_AUX
+    expressao();
+    lista_argumentos_aux();
+}
+
+void lista_argumentos_aux() {                       // LISTA_ARGUMENTOS_AUX -> ',' LISTA_ARGUMENTOS | ε
+    if (lookahead.tipo == VIRGULA) {
+        consome(VIRGULA);
+        lista_argumentos();
+    }
+    //                                              // LISTA_ARGUMENTOS_AUX -> ε
+}
+
+void expressao() {                                  // EXPRESSAO -> EXP_OR
     exp_or();
 }
 
-// EXP_OR -> EXP_AND | EXP_OR or EXP_AND
-void exp_or() {
-    exp_and();                      // EXP_OR -> EXP_AND
-    while (lookahead.tipo == OR) {  // EXP_OR -> EXP_OR or EXP_AND
+void exp_or() {                                     // EXP_OR -> EXP_AND EXP_OR_AUX
+    exp_and();
+    exp_or_aux();
+}
+
+void exp_or_aux() {                                 // EXP_OR_AUX -> or EXP_AND EXP_OR_AUX | ε
+    if (lookahead.tipo == OR) {
         consome(OR);
         exp_and();
+        exp_or_aux();
     }
+    //                                              // EXP_OR_AUX -> ε
 }
 
-// EXP_AND -> EXP_RELACIONAL | EXP_AND and EXP_RELACIONAL
-void exp_and() {
-    exp_relacional();               // EXP_AND -> EXP_RELACIONAL
-    while (lookahead.tipo == AND) { // EXP_AND -> EXP_AND and EXP_RELACIONAL
+void exp_and() {                                    // EXP_AND -> EXP_COMP EXP_AND_AUX
+    exp_comp();
+    exp_and_aux();
+}
+
+void exp_and_aux() {                                // EXP_AND_AUX -> and EXP_COMP EXP_AND_AUX | ε
+    if (lookahead.tipo == AND) {
         consome(AND);
-        exp_relacional();
+        exp_comp();
+        exp_and_aux();
     }
+    //                                              // EXP_AND_AUX -> ε
 }
 
-// EXP_RELACIONAL -> EXP_ARITMETICA | EXP_RELACIONAL OP_RELACIONAL EXP_ARITMETICA
-void exp_relacional() {
-    exp_aritmetica();     // EXP_RELACIONAL -> EXP_ARITMETICA
-    // EXP_RELACIONAL -> EXP_RELACIONAL OP_RELACIONAL EXP_ARITMETICA
-    while (lookahead.tipo == IGUAL || lookahead.tipo == DIFERENTE || lookahead.tipo == MENOR || lookahead.tipo == MAIOR || lookahead.tipo == MENOR_IGUAL || lookahead.tipo == MAIOR_IGUAL || lookahead.tipo == IS || lookahead.tipo == IN) {
-        consome(lookahead.tipo);
+void exp_comp() {                                   // EXP_COMP -> EXP_ARITMETICA EXP_COMP_AUX
+    exp_aritmetica();
+    exp_comp_aux();
+}
+
+void exp_comp_aux() {                               // EXP_COMP_AUX -> OP_COMP EXP_ARITMETICA EXP_COMP_AUX | ε
+    if (lookahead.tipo == IGUAL || lookahead.tipo == DIFERENTE || lookahead.tipo == MENOR || lookahead.tipo == MAIOR || lookahead.tipo == MENOR_IGUAL || lookahead.tipo == MAIOR_IGUAL || lookahead.tipo == IS || lookahead.tipo == IN) {
+        op_comp();
         exp_aritmetica();
+        exp_comp_aux();
     }
+    //                                              // EXP_COMP_AUX -> ε
 }
 
-// EXP_ARITMETICA -> TERMO | EXP_ARITMETICA OP_SOMA TERMO
-void exp_aritmetica() {
-    termo();             // EXP_ARITMETICA -> TERMO
-    while (lookahead.tipo == SOMA || lookahead.tipo == SUB) { // EXP_ARITMETICA -> EXP_ARITMETICA OP_SOMA TERMO
-        consome(lookahead.tipo);
+void exp_aritmetica() {                             // EXP_ARITMETICA -> TERMO EXP_ARITMETICA_AUX
+    termo();
+    exp_aritmetica_aux();
+}
+
+void exp_aritmetica_aux() {                         // EXP_ARITMETICA_AUX -> OP_SOMA TERMO EXP_ARITMETICA_AUX | ε
+    if (lookahead.tipo == SOMA || lookahead.tipo == SUB) {
+        op_soma();
         termo();
+        exp_aritmetica_aux();
     }
+    //                                              // EXP_ARITMETICA_AUX -> ε
 }
 
-// TERMO -> FATOR | TERMO OP_MULT FATOR
-void termo() {
-    fator();            // TERMO -> FATOR
-    // TERMO -> TERMO OP_MULT FATOR
-    while (lookahead.tipo == MULT || lookahead.tipo == DIV || lookahead.tipo == MOD || lookahead.tipo == EXP) {
-        consome(lookahead.tipo);
+void termo() {                                      // TERMO -> FATOR TERMO_AUX
+    fator();
+    termo_aux();
+}
+
+void termo_aux() {                                  // TERMO_AUX -> OP_MULT FATOR TERMO_AUX | ε
+    if (lookahead.tipo == MULT || lookahead.tipo == DIV || lookahead.tipo == MOD) {
+        op_mult();
         fator();
+        termo_aux();
     }
+    //                                              // TERMO_AUX -> ε
 }
 
-// FATOR -> OP_UNARIO FATOR | PRIMARIO
-void fator() {
-    // FATOR -> OP_UNARIO FATOR
+void fator() {                                      // FATOR -> OP_UNICO FATOR | PRIMARIO
     if (lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        consome(lookahead.tipo);
+        op_unico();
         fator();
-    } else { // FATOR -> PRIMARIO
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR) {
         primario();
+    } else {
+        erro_sintatico("Esperado operador único ou primário"); // ERRO SINTÁTICO
     }
 }
 
-// LISTA_DECLARACAO -> '[' LISTA_ARGUMENTOS ']' | '[' ']'
-void lista_declaracao() {
-    consome(ABRE_COL);
-    if (lookahead.tipo != FECHA_COL) { // LISTA_DECLARACAO -> '[' LISTA_ARGUMENTOS ']'
-        lista_argumentos();
-    }
-    consome(FECHA_COL);               // LISTA_DECLARACAO -> '[' ']'
-}
-
-// PRIMARIO -> NUMERO | BOOLEANO | STRING | VARIAVEL | CHAMADA_FUNCAO | LISTA_DECLARACAO | '(' EXPRESSAO ')' | TUPLA
-void primario() {
-    if (lookahead.tipo == NUMERO) { // PRIMARIO -> NUMERO
+void primario() {                                   // PRIMARIO -> NUMERO | BOOLEANO | STRING | CHAMA_ID | len '(' IDENTIFICADOR ')' | LISTA_DECLARACAO | '(' EXPRESSAO ')' | TUPLA
+    if (lookahead.tipo == NUMERO) {
         consome(NUMERO);
-    } else if (lookahead.tipo == BOOLEANO) { // PRIMARIO -> BOOLEANO
+    } else if (lookahead.tipo == BOOLEANO) {
         consome(BOOLEANO);
-    } else if (lookahead.tipo == STRING) { // PRIMARIO -> STRING
+    } else if (lookahead.tipo == STRING) {
         consome(STRING);
-    } else if (lookahead.tipo == ABRE_PAR) {
-        // ATUALIZADO: Fatoração para resolver o conflito entre '(' EXPRESSAO ')' e TUPLA
-        consome(ABRE_PAR);
-        
-        if (lookahead.tipo == FECHA_PAR) { // PRIMARIO -> TUPLA -> '(' ')'
-            consome(FECHA_PAR);            // TUPLA -> '(' ')'
-        } else {
-            expressao();                   // PRIMARIO -> '(' EXPRESSAO ')' ou TUPLA -> '(' EXPRESSAO ',' ... ')'
-            
-            if (lookahead.tipo == FECHA_PAR) { // PRIMARIO -> '(' EXPRESSAO ')'
-                consome(FECHA_PAR);
-            } else if (lookahead.tipo == VIRGULA) { // PRIMARIO -> TUPLA -> '(' EXPRESSAO ',' ... ')'
-                consome(VIRGULA);
-                if (lookahead.tipo == FECHA_PAR) { // TUPLA -> '(' EXPRESSAO ',' ')'
-                    consome(FECHA_PAR);
-                } else {                          // TUPLA -> '(' EXPRESSAO ',' LISTA_ARGUMENTOS ')'
-                    lista_argumentos();
-                    consome(FECHA_PAR);
-                }
-            } else {
-                erro_sintatico("Esperado ')' ou ',' apos expressao");
-            }
-        }
-    } else if (lookahead.tipo == ABRE_COL) { // PRIMARIO -> LISTA_DECLARACAO
-        lista_declaracao();
-    } else if (lookahead.tipo == LEN) {     // CHAMADA_FUNCAO -> len '(' IDENTIFICADOR ')'
+    } else if (lookahead.tipo == IDENTIFICADOR) {
+        chama_id();
+    } else if (lookahead.tipo == LEN) {
         consome(LEN);
         consome(ABRE_PAR);
         consome(IDENTIFICADOR);
         consome(FECHA_PAR);
-    } else if (lookahead.tipo == IDENTIFICADOR) { // VARIAVEL ou CHAMADA_FUNCAO
-        consome(IDENTIFICADOR);
-        if (lookahead.tipo == ABRE_COL) { // VARIAVEL -> IDENTIFICADOR '[' EXPRESSAO ']'
-            consome(ABRE_COL);
+    } else if (lookahead.tipo == ABRE_COL) {
+        lista_declaracao();
+    } else if (lookahead.tipo == ABRE_PAR) {
+        consome(ABRE_PAR);
+        if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
             expressao();
-            consome(FECHA_COL);
-        } else if (lookahead.tipo == ABRE_PAR) { // CHAMADA_FUNCAO -> IDENTIFICADOR '(' LISTA_ARGUMENTOS ')' ou IDENTIFICADOR '(' ')'
-            consome(ABRE_PAR);
-            if (lookahead.tipo != FECHA_PAR) {
-                lista_argumentos();
-            }
             consome(FECHA_PAR);
         }
+        else {
+            tupla();
+        }
     } else {
-        erro_sintatico("Expressão ou fator inválido");
+        erro_sintatico("Esperado número, booleano, string, chamada de ID, len, lista, expressão entre parênteses ou tupla"); // ERRO SINTÁTICO
     }
 }
 
+void chama_id() {                                   // CHAMA_ID -> IDENTIFICADOR CHAMA_ID_AUX
+    consome(IDENTIFICADOR);
+    chama_id_aux();
+}
 
+void chama_id_aux() {                               // CHAMA_ID_AUX -> '[' EXPRESSAO ']' | '(' CHAMADA_FUNCAO_AUX | ε
+    if (lookahead.tipo == ABRE_COL) {
+        consome(ABRE_COL);
+        expressao();
+        consome(FECHA_COL);
+    } else if (lookahead.tipo == ABRE_PAR) {
+        consome(ABRE_PAR);
+        chamada_funcao_aux();
+    }
+    //                                              // CHAMA_ID_AUX -> ε
+}
 
+void lista_declaracao() {                           // LISTA_DECLARACAO -> '[' LISTA_DECLARACAO_AUX
+    consome(ABRE_COL);
+    lista_declaracao_aux();
+}
+
+void lista_declaracao_aux() {                       // LISTA_DECLARACAO_AUX -> ']' | LISTA_ARGUMENTOS ']'
+    if (lookahead.tipo == FECHA_COL) {
+        consome(FECHA_COL);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+        lista_argumentos();
+        consome(FECHA_COL);
+    } else {
+        erro_sintatico("Esperado ']' ou expressão"); // ERRO SINTÁTICO
+    }
+}
+
+void op_comp() {                                     // OP_COMP -> '==' | '!=' | '<>' | '<' | '>' | '<=' | '>=' | is | in
+    if (lookahead.tipo == IGUAL) {
+        consome(IGUAL);
+    } else if (lookahead.tipo == DIFERENTE) {        // PS: Tanto '!=' quanto'<>' são considerados operadores de diferente
+        consome(DIFERENTE);
+    } else if (lookahead.tipo == MENOR) {
+        consome(MENOR);
+    } else if (lookahead.tipo == MAIOR) {
+        consome(MAIOR);
+    } else if (lookahead.tipo == MENOR_IGUAL) {
+        consome(MENOR_IGUAL);
+    } else if (lookahead.tipo == MAIOR_IGUAL) {
+        consome(MAIOR_IGUAL);
+    } else if (lookahead.tipo == IS) {
+        consome(IS);
+    } else if (lookahead.tipo == IN) {
+        consome(IN);
+    } else {
+        erro_sintatico("Esperado operador de comparação"); // ERRO SINTÁTICO
+    }
+}
+
+void op_soma() {                                     // OP_SOMA -> '+' | '-'
+    if (lookahead.tipo == SOMA) {
+        consome(SOMA);
+    } else if (lookahead.tipo == SUB) {
+        consome(SUB);
+    } else {
+        erro_sintatico("Esperado '+' ou '-'"); // ERRO SINTÁTICO
+    }
+}
+
+void op_mult() {                                     // OP_MULT -> '*' | '/' | '%' | '**'
+    if (lookahead.tipo == MULT) {
+        consome(MULT);
+    } else if (lookahead.tipo == DIV) {
+        consome(DIV);
+    } else if (lookahead.tipo == MOD) {
+        consome(MOD);
+    } else if (lookahead.tipo == EXP) {
+        consome(EXP);
+    } else {
+        erro_sintatico("Esperado '*', '/', '%' ou '**'"); // ERRO SINTÁTICO
+    }
+}
+
+void op_unico() {                                    // OP_UNICO -> '+' | '-' | '~' | not
+    if (lookahead.tipo == SOMA) {
+        consome(SOMA);
+    } else if (lookahead.tipo == SUB) {
+        consome(SUB);
+    } else if (lookahead.tipo == BIT_NOT) {
+        consome(BIT_NOT);
+    } else if (lookahead.tipo == NOT) {
+        consome(NOT);
+    } else {
+        erro_sintatico("Esperado '+', '-', '~' ou 'not'"); // ERRO SINTÁTICO
+    }
+}
+
+void tupla() {                                       // TUPLA -> ')' | EXPRESSAO TUPLA_FIM
+    if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+        expressao();
+        tupla_fim();
+    } else {
+        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
+    }
+}
+
+void tupla_fim() {                                   // TUPLA_FIM -> ',' ')' | ',' LISTA_ARGUMENTOS ')'
+    if (lookahead.tipo == VIRGULA) {
+        consome(VIRGULA);
+        if (lookahead.tipo == FECHA_PAR) {
+            consome(FECHA_PAR);
+        } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+            lista_argumentos();
+            consome(FECHA_PAR);
+        } else {
+            erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
+        }
+    } else {
+        erro_sintatico("Esperado ','"); // ERRO SINTÁTICO
+    }
+}
 
 // ===============================================================================
 //                             MAIN PARA IMPRIMIR TESTES
 // ===============================================================================
 
+// argc -> número de argumentos
+//argv -> array de strings com os argumentos (sendo argv[0] o nome do programa)
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printf("Uso: %s <arquivo_fonte>\n", argv[0]);
+
+    // ----------------------------- INICIALIZAÇÃO -----------------------------
+    if (argc < 2) {                                                   // Se o arquivo fonte não for passado como argumento, avisa usuário
+        printf("Arquivo fonte não foi passado como argumento.\n");
         return 1;
     }
 
-    fonte = fopen(argv[1], "r");
-    if (fonte == NULL) {
+    fonte = fopen(argv[1], "r");                                      // Tenta abrir o arquivo fonte passado como argumento
+    if (fonte == NULL) {                                              // Verifica se não deu errado
         printf("Erro ao abrir o arquivo.\n");
         return 1;
     }
 
-    // Cria o arquivo de saída
-    saida = fopen("tokens.txt", "w");
-    if (saida == NULL) {
+    saida = fopen("tokens.txt", "w");                                 // Cria o arquivo de saída para os tokens do analisador léxico
+    if (saida == NULL) {                                              // Verifica se não deu errado
         printf("Erro ao criar arquivo de tokens do analisador lexico.\n");
         return 1;
     }
     
-    // Inicia o sintático
-    lookahead = obter_atomo();
-    codigo();
-    
+    // ============================= RODA PROGRAMA =============================
+    lookahead = obter_atomo();                                        // Inicializa o lookahead
+    lista_instrucoes();
+
     printf("Compilacao terminada com sucesso!\n");
 
     fclose(fonte);
+    fclose(saida);
     return 0;
 }

@@ -46,3 +46,7 @@ if c is a:
     print("c eh a")
 
 x = a in tupla_cheia
+
+#################
+
+fel = [ funcao_em_lista_pode() ]
