@@ -30,6 +30,6 @@ Execute passando o arquivo de teste.py:
 3. DECISÃO DE DESIGN
 --------------------------------------------------------------------------------
 
-“{” “}”e ”.” não foram adicionados, pois são utilizados na linguagem para floats,
+“{” “}” e ”.” não foram adicionados, pois são utilizados na linguagem para floats,
 formatação de strings, dicionários, atributos e objetos. Que não estão inclusos no
 escopo do projeto, especificado através do pdf e exemplos.

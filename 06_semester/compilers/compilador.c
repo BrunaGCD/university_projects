@@ -38,8 +38,7 @@ typedef enum {
     
     // Palavras reservadas
     IF, ELSE, ELIF, WHILE, FOR, IN, RANGE, PRINT,
-    INPUT, LEN, AND, OR, NOT, IS, DEF, RETURN,
-    BREAK, EXEC,
+    INPUT, LEN, AND, OR, NOT, IS, DEF, RETURN, EXEC,
     
     // Operadores
     ATRIBUICAO, SOMA, SUB, MULT, DIV, MOD, EXP, BIT_NOT,
@@ -119,7 +118,6 @@ char* retorna_string_tipo(TAtomo tipo) {
     else if (tipo == IS) return "IS";
     else if (tipo == DEF) return "DEF";
     else if (tipo == RETURN) return "RETURN";
-    else if (tipo == BREAK) return "BREAK";
     else if (tipo == EXEC) return "EXEC";
     else if (tipo == ATRIBUICAO) return "ATRIBUICAO";
     else if (tipo == SOMA) return "SOMA";
@@ -267,7 +265,6 @@ TInfoAtomo obter_atomo() {
     else if (strcmp(token.lexema, "is") == 0) token.tipo = IS;
     else if (strcmp(token.lexema, "def") == 0) token.tipo = DEF;
     else if (strcmp(token.lexema, "return") == 0) token.tipo = RETURN;
-    else if (strcmp(token.lexema, "break") == 0) token.tipo = BREAK;
     else if (strcmp(token.lexema, "exec") == 0) token.tipo = EXEC;
     else if (strcmp(token.lexema, "=") == 0) token.tipo = ATRIBUICAO;
     else if (strcmp(token.lexema, "+") == 0) token.tipo = SOMA;
@@ -342,7 +339,6 @@ void input();
 void input_aux();
 void def();
 void exec();
-void breakk();
 void identificadores();
 void lista_imprimivel();
 void chama_id();
@@ -404,7 +400,7 @@ void consome(TAtomo esperado) { // Verifica se o token atual é o esperado e ava
 // ------------------------------ INÍCIO DO ANALISADOR SINTÁTICO  -------------------------------
 
 // [MUDANÇA] Gramática foi corrigida e adaptada para não ter recursão à esquerda, assim como visto em aula. Recomendo visualizá-la por completo para perceber a presença dos não-terminais auxiliares e epsilon.
-// [MUDANÇA] Percebemos tardiamente que as palavras reservadas que NÃO estavam em NEGRITO na descrição do projeto eram não-obrigatórias, então algumas estão inclusas e outras não estão.
+// [MUDANÇA] Percebemos tardiamente que as palavras reservadas que NÃO estavam em NEGRITO na descrição do projeto eram não-obrigatórias, então algumas podem ter sido inclusas e outras não.
 // [MUDANÇA] Corrigimos as mensagens de erro, que agora sempre apresentam corretamente a causa real de um erro sintático.
 
 void lista_instrucoes() {                            // LISTA_INSTRUCOES -> INSTRUCAO LISTA_INSTRUCOES_AUX
@@ -418,19 +414,17 @@ void lista_instrucoes() {                            // LISTA_INSTRUCOES -> INST
 }
 
 void lista_instrucoes_aux() {                        // LISTA_INSTRUCOES_AUX -> LISTA_INSTRUCOES | ε
-    if (lookahead.tipo == IDENTIFICADOR || lookahead.tipo == IF || lookahead.tipo == WHILE || lookahead.tipo == FOR || lookahead.tipo == PRINT || lookahead.tipo == LEN || lookahead.tipo == DEF || lookahead.tipo == EXEC || lookahead.tipo == BREAK) {
+    if (lookahead.tipo == IDENTIFICADOR || lookahead.tipo == IF || lookahead.tipo == WHILE || lookahead.tipo == FOR || lookahead.tipo == PRINT || lookahead.tipo == LEN || lookahead.tipo == DEF || lookahead.tipo == EXEC || lookahead.tipo == INPUT) {
         lista_instrucoes();                          // LISTA_INSTRUCOES_AUX -> LISTA_INSTRUCOES
     }
     //                                               // LISTA_INSTRUCOES_AUX -> ε
 }
 
-void instrucao() {                                   // INSTRUCAO -> IDENTIFICADORES | PRINT | BREAK | EXEC | DEF | IF | WHILE | FOR
+void instrucao() {                                   // INSTRUCAO -> IDENTIFICADORES | PRINT | EXEC | DEF | IF | WHILE | FOR | INPUT
     if (lookahead.tipo == IDENTIFICADOR) {
         identificadores();
     } else if (lookahead.tipo == PRINT) {
         print();
-    } else if (lookahead.tipo == BREAK) {
-        breakk();
     } else if (lookahead.tipo == EXEC) {
         exec();
     } else if (lookahead.tipo == DEF) {
@@ -441,13 +435,11 @@ void instrucao() {                                   // INSTRUCAO -> IDENTIFICAD
         whilee();
     } else if (lookahead.tipo == FOR) {
         forr();
+    } else if (lookahead.tipo == INPUT) {
+        input();
     } else {
         erro_sintatico("Instrução não reconhecida"); // ERRO SINTÁTICO
     }
-}
-
-void breakk() {                                      // BREAK -> break
-    consome(BREAK);
 }
 
 void input() {                                      // INPUT -> input '(' INPUT_AUX ')'
@@ -562,7 +554,7 @@ void identificadores() {                             // IDENTIFICADORES -> IDENT
     identificadores_aux();
 }
 
-void identificadores_aux() {                         // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX)
+void identificadores_aux() {                         // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX
     if (lookahead.tipo == ATRIBUICAO) {
         consome(ATRIBUICAO);
         expressao();
@@ -708,7 +700,7 @@ void fator() {                                       // FATOR -> OP_UNICO FATOR 
     if (lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
         op_unico();
         fator();
-    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR) {
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == INPUT || lookahead.tipo == ABRE_PAR) {
         primario();
     } else {
         erro_sintatico("Esperado operador único ou primário"); // ERRO SINTÁTICO
@@ -741,12 +733,14 @@ void primario() {                                    // PRIMARIO -> NUMERO | BOO
     }
 }
 
-void primario_aux() {                                // PRIMARIO_AUX -> EXPRESSAO ')' | TUPLA
-    if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+void primario_aux() {                                // PRIMARIO_AUX -> ')' | EXPRESSAO TUPLA
+    if (lookahead.tipo == ABRE_PAR) {
+        consome(ABRE_PAR);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
         expressao();
-        consome(FECHA_PAR);
-    } else {
         tupla();
+    } else {
+        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
     }
 }
 
@@ -843,30 +837,25 @@ void op_unico() {                                    // OP_UNICO -> '+' | '-' | 
     }
 }
 
-void tupla() {                                       // TUPLA -> ')' | EXPRESSAO TUPLA_AUX
+void tupla() {                                       // TUPLA -> ')' | ',' TUPLA_AUX
     if (lookahead.tipo == FECHA_PAR) {
         consome(FECHA_PAR);
-    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        expressao();
+    } else if (lookahead.tipo == VIRGULA) {
+        consome(VIRGULA);
         tupla_aux();
     } else {
-        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
+        erro_sintatico("Esperado ')' ou ','"); // ERRO SINTÁTICO
     }
 }
 
-void tupla_aux() {                                   // TUPLA_AUX -> ',' ')' | ',' LISTA_ARGUMENTOS ')'
-    if (lookahead.tipo == VIRGULA) {
-        consome(VIRGULA);
-        if (lookahead.tipo == FECHA_PAR) {
-            consome(FECHA_PAR);
-        } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-            lista_argumentos();
-            consome(FECHA_PAR);
-        } else {
-            erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
-        }
+void tupla_aux() {                                   // TUPLA_AUX -> ')' | LISTA_ARGUMENTOS ')'
+    if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
+    } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
+        lista_argumentos();
+        consome(FECHA_PAR);
     } else {
-        erro_sintatico("Esperado ','"); // ERRO SINTÁTICO
+        erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
     }
 }
 
