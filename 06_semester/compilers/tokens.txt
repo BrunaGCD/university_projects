@@ -1,0 +1,6 @@
+2# IDENTIFICADOR | var 1
+2# ABRE_COL | [
+2# NUMERO | 2
+2# FECHA_COL | ]
+2# ATRIBUICAO | =
+2# NUMERO | 3

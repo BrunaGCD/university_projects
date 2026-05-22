@@ -4,16 +4,6 @@
 Bruna Gonçalves Corte David - RA: 10425696
 Júlia Andrade - RA: 10428513
 
-
-
-
-        vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
->>>>>> Digite "MUDANÇA" no Ctrl + F para visualizar rapidamente as correções feitas no código <<<<<
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-
-
-
 */
 
 #include <stdio.h>
@@ -58,14 +48,34 @@ typedef struct {
     int linha;
 } TInfoAtomo;
 
-// Variáveis globais
+// -------- ARQUIVOS GLOBAIS --------
 FILE *fonte;
 FILE *saida;
+FILE *instrucoes;
 int linhaAtual = 1;
 
-TInfoAtomo lista_identificadores[100];            // [MUDANÇA] Adicionado array de identificadores que associa cada um à um ID para impressão correta e detecção de CaseSensitive
+// --------- USO DO LÉXICO ----------
+TInfoAtomo lista_identificadores[100];
 int total_identificadores = 0;
 
+// ------- USO DO SEMÂNTICO ---------
+// Minitabela de símbolos
+typedef struct _TNo {
+    char ID [16]; // lexema
+    int endereco;
+    char tipo [7];
+    struct _TNo *prox;
+} TNo;
+TNo *minitabela_de_simbolos = NULL;
+int contador_enderecos = 0;
+
+// TODO array de usados
+
+// --------- USO DO G.C.I. ----------
+typedef struct End {                   // Usado para transportar dados de "End"s de todas as instruções no formato x = y op z
+    char lexema[100];
+    char tipo[7];
+} End;
 
 
 // ----------------------------------------------------------------------------------------------
@@ -154,7 +164,7 @@ void imprime_token(TInfoAtomo token) {
         printf("ERRO LÉXICO: linha %d - (token atual: %s)\n", token.linha, token.lexema);
         fprintf(saida, "ERRO LÉXICO: linha %d - (token atual: %s)\n", token.linha, token.lexema);
         exit(1);
-    } else if (token.tipo != EOS) {                                           // [MUDANÇA] Impressão correta dos identificadores e seus IDs
+    } else if (token.tipo != EOS) {
         if (token.tipo == IDENTIFICADOR) {                                    // Se for o token for um identificador,
             int id = 0;
             for (int i = 0; i < total_identificadores; i++) {                 // Percorro a lista de identificadores
@@ -236,7 +246,7 @@ TInfoAtomo obter_atomo() {
         return token;
     }
 
-    // ----------------------------- MONTA LEXEMA ATÉ ENCONTRAR ESPAÇO ------------------------------ [MUDANÇA] Leitura de lexemas agora é feita de espaço em espaço ao invés de caractere por caractere
+    // ----------------------------- MONTA LEXEMA ATÉ ENCONTRAR ESPAÇO ------------------------------
     token.lexema[i++] = c;                                  // Inicia lexema com caractere atual (já se sabe que não é um espaço)
     while ((c = fgetc(fonte)) != EOF && !isspace(c)) {      // Monta lexema até encontrar o final do arquivo, um espaço ou um quebra linha
         token.lexema[i++] = c;
@@ -247,7 +257,7 @@ TInfoAtomo obter_atomo() {
         linhaAtual++;
     }
 
-    // -------------------------------------- CLASSIFICA TOKEN -------------------------------------- [MUDANÇA] Classificação de tokens foi adaptada e facilitada agora que sempre obtemos o lexema inteiro
+    // -------------------------------------- CLASSIFICA TOKEN --------------------------------------
 
     if (strcmp(token.lexema, "if") == 0) token.tipo = IF;
     else if (strcmp(token.lexema, "else") == 0) token.tipo = ELSE;
@@ -295,7 +305,7 @@ TInfoAtomo obter_atomo() {
     else if (eh_identificador(token.lexema)) token.tipo = IDENTIFICADOR;
     else token.tipo = ERRO; // Se não se encaixar em nenhum dos casos anteriores, é um erro léxico
 
-    // -------------------------- CASO ESPECIAL: TOKEN É UM IDENTIFICADOR --------------------------- [MUDANÇA] Cada NOVO identificador encontrado é guardado no array de identificadores para associá-lo à um ID
+    // -------------------------- CASO ESPECIAL: TOKEN É UM IDENTIFICADOR ---------------------------
 
     if (token.tipo == IDENTIFICADOR) {                      // No caso de ser identificador, é guardado num array para associà-lo à um ID
         int flag = 0;
@@ -319,6 +329,49 @@ TInfoAtomo obter_atomo() {
     return token;
 }
 
+
+
+// ==============================================================================================
+//                                      ANALISADOR SEMÂNTICO
+// ==============================================================================================
+
+TNo* busca_tabela_simbolos(char *lexema) {
+    TNo *no = minitabela_de_simbolos;      // Aponta para o nó mais à esquerda na lista encadeada atual
+    while (no != NULL) {                   // Percorre a lista encadeada até no máximo chegar no final dela (NULL)
+        if (strcmp((*no).ID, lexema) == 0) { // Verifica se o nó atual representa o identificador/variável com o lexema sendo buscado
+            return no;                     // Se sim, retorna ele
+        }
+        no = (*no).prox;                   // Se não, continua para o próximo nó da lista encadeada
+    }
+    return NULL;                           // Se não encontrou, retorna que não existe
+}
+
+void insere_minitabela_de_simbolos(char *lexema, char *tipo) {
+    TNo *no = (TNo*) malloc(sizeof(TNo));  // Aloca espaço para novo nó na tabela
+    strcpy((*no).ID, lexema);              // Insere o atributo ID/lexema nele
+    strcpy((*no).tipo, tipo);              // Insere o atributo tipo nele
+    (*no).endereco = contador_enderecos++; // Insere o atributo endereço nele
+
+    (*no).prox = minitabela_de_simbolos;   // Aponta para o nó mais à esquerda na lista encadeada atual
+    minitabela_de_simbolos = no;           // Se torna o nó mais à esquerda na lista encadeada atual
+}
+
+void semantico_validar_atribuicao(char *lexema, char *tipo) {
+
+    // ----------- VERIFICA SE JÁ EXISTE ------------
+    TNo *no = busca_tabela_simbolos(lexema); // TODO - Procura esse identificador/variável na minitabela
+
+    if (no == NULL) {                                // Identificador/variável não existe na minitabela, ou seja, é a primeira declaração dele
+        insere_minitabela_de_simbolos(lexema, tipo); // Adiciona ele na minitabela (essa atribuição é válida)
+    } else {
+        // ----------- VERIFICA SE TIPO DE DADO MUDOU ------------
+        if (strcmp((*no).tipo, tipo) != 0) {         // Se um tipo de dado DIFERENTE do atual guardado no identificador/variavel estiver sendo atribuído à ele, então é erro
+            printf("ERRO SEMANTICO: linha %d - Tentativa de atribuir dado de tipo %s em variavel de tipo Y\n", lookahead.linha, tipo, (*no).tipo);            
+            exit(1);
+        }
+        //                                           // (essa atribuição é válida)
+    }
+}
 
 
 // ==============================================================================================
@@ -398,10 +451,6 @@ void consome(TAtomo esperado) { // Verifica se o token atual é o esperado e ava
 }
 
 // ------------------------------ INÍCIO DO ANALISADOR SINTÁTICO  -------------------------------
-
-// [MUDANÇA] Gramática foi corrigida e adaptada para não ter recursão à esquerda, assim como visto em aula. Recomendo visualizá-la por completo para perceber a presença dos não-terminais auxiliares e epsilon.
-// [MUDANÇA] Percebemos tardiamente que as palavras reservadas que NÃO estavam em NEGRITO na descrição do projeto eram não-obrigatórias, então algumas podem ter sido inclusas e outras não.
-// [MUDANÇA] Corrigimos as mensagens de erro, que agora sempre apresentam corretamente a causa real de um erro sintático.
 
 void lista_instrucoes() {                            // LISTA_INSTRUCOES -> INSTRUCAO LISTA_INSTRUCOES_AUX
 
@@ -550,19 +599,35 @@ void forr() {                                        // FOR -> for IDENTIFICADOR
 }
 
 void identificadores() {                             // IDENTIFICADORES -> IDENTIFICADOR IDENTIFICADORES_AUX
+
+    End end_esquerda;                                // G.C.I.: Salva lexema do end_esquerda antes do consome()
+    strcpy(end_esquerda.lexema, lookahead.lexema);
+    end_esquerda.tipo[0] = '\0';                     // G.C.I.: "Flag" para tipo "nulo"
+
     consome(IDENTIFICADOR);
-    identificadores_aux();
+
+    identificadores_aux(end_esquerda);               // G.C.I.: Passa end_esquerda "para baixo" p/ op
 }
 
-void identificadores_aux() {                         // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX
+void identificadores_aux(End end_esquerda) {       // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX
     if (lookahead.tipo == ATRIBUICAO) {
         consome(ATRIBUICAO);
-        expressao();
+
+        // TODO: essa linha é um rascunho ainda, n terminei a recursão
+        End end_direita = expressao();               // G.C.I.: Solicita end_direita
+
+        // ----------------------- ANÁLISE SEMÂNTICA -----------------------
+        semantico_validar_atribuicao(end_esquerda.lexema, end_direita.tipo);
+        // -----------------------------------------------------------------
+
+        fprintf(instrucoes, "%s = %s\n", end_esquerda.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_esquerda = end_direita"
+
     } else if (lookahead.tipo == ABRE_COL) {
+        printf("\nTeste\n");
         consome(ABRE_COL);
         expressao();
         consome(FECHA_COL);
-        consome(IGUAL);
+        consome(ATRIBUICAO);
         expressao();
     } else if (lookahead.tipo == ABRE_PAR) {
         consome(ABRE_PAR);
@@ -622,11 +687,11 @@ void lista_argumentos_aux() {                        // LISTA_ARGUMENTOS_AUX -> 
     //                                               // LISTA_ARGUMENTOS_AUX -> ε
 }
 
-void expressao() {                                   // EXPRESSAO -> EXP_OR
-    exp_or();
+End expressao() {                                   // EXPRESSAO -> EXP_OR
+    return exp_or();
 }
 
-void exp_or() {                                      // EXP_OR -> EXP_AND EXP_OR_AUX
+End exp_or() {                                      // EXP_OR -> EXP_AND EXP_OR_AUX
     exp_and();
     exp_or_aux();
 }
@@ -863,7 +928,7 @@ void tupla_aux() {                                   // TUPLA_AUX -> ')' | LISTA
 
 
 // ==============================================================================================
-//                                    MAIN PARA IMPRIMIR TESTES
+//                                            MAIN
 // ==============================================================================================
 
 // argc -> número de argumentos
@@ -887,14 +952,21 @@ int main(int argc, char *argv[]) {
         printf("Erro ao criar arquivo de tokens do analisador lexico.\n");
         return 1;
     }
+
+    instrucoes = fopen("instrucoes.txt", "w");                        // Cria o arquivo de instruções para o Gerador de Código Intermediário (G.C.I)
+    if (instrucoes == NULL) {                                         // Verifica se não deu errado
+        printf("Erro ao criar arquivo de tokens do analisador lexico.\n");
+        return 1;
+    }
     
     // ============================= RODA PROGRAMA =============================
     lookahead = obter_atomo();                                        // Inicializa o lookahead
-    lista_instrucoes();                                               // [MUDANÇA] Chama o analisador sintático diretamente ao invés de usar uma função intermediária
+    lista_instrucoes();
 
     printf("Compilacao terminada com sucesso!\n");
 
     fclose(fonte);
     fclose(saida);
+    fclose(instrucoes);
     return 0;
 }
