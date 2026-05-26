@@ -28,7 +28,7 @@ typedef enum {
     
     // Palavras reservadas
     IF, ELSE, ELIF, WHILE, FOR, IN, RANGE, PRINT,
-    INPUT, LEN, AND, OR, NOT, IS, DEF, RETURN, EXEC,
+    INPUT, LEN, AND, OR, NOT, IS, DEF, RETURN, EXEC, FROM,
     
     // Operadores
     ATRIBUICAO, SOMA, SUB, MULT, DIV, MOD, EXP, BIT_NOT,
@@ -58,12 +58,19 @@ int linhaAtual = 1;
 TInfoAtomo lista_identificadores[100];
 int total_identificadores = 0;
 
+// ------- USO DO SINTÁTICO ---------
+TInfoAtomo lookahead;
+
 // ------- USO DO SEMÂNTICO ---------
 // Minitabela de símbolos
 typedef struct _TNo {
     char ID [16]; // lexema
     int endereco;
-    char tipo [7];
+    char tipo [7];                     // O tipo pode ser um dos 6 a seguir: INT, BOOL, INTLIS, INTTUP, BOLLIS e BOLTUP (Explicação detalhada no nosso README)
+    
+    int flag_existe;                   // Flag que decidimos adicionar à estrutura de minitabela para poder "deletar" variáveis declaradas em um escopo quando se sai desse escopo sem precisar atualizar minitabela inteira
+    int flag_usado;                    // Flag que decidimos adicionar à estrutura de minitabela para poder acompanhar quais variáveis foram ou não usadas (chamadas/referenciadas) no corpo do código após declaração
+
     struct _TNo *prox;
 } TNo;
 TNo *minitabela_de_simbolos = NULL;
@@ -71,11 +78,21 @@ int contador_enderecos = 0;
 
 // TODO array de usados
 
+int flag_pode_string = 0;              // O tipo STRING existe SOMENTE em um print, ele é desconhecido em qualquer outra parte do código e é proibido (Explicação detalhada no nosso README)
+
 // --------- USO DO G.C.I. ----------
-typedef struct End {                   // Usado para transportar dados de "End"s de todas as instruções no formato x = y op z
+typedef struct End {                   // Usado para transportar dados de "End"s de todas as instruções no formato "end op end" (x = y op z | end op end op end)
     char lexema[100];
-    char tipo[7];
+    char tipo[7];                      // O tipo pode ser um dos 6 a seguir: INT, BOOL, INTLIS, INTTUP, BOLLIS e BOLTUP (Explicação detalhada no nosso README)
 } End;
+typedef struct Op {                    // Usado para transportar dados de "Op"s de todas as instruções no formato "end op end" (x = y op z | end op end op end)
+    char lexema[100];
+} Op;
+
+int contador_proximo_rotulo_t = 1;
+int contador_proximo_rotulo_l = 0;
+
+End conjunto_sendo_declarado;          // Variável global para facilitar a geração de código intermediário de listas e tuplas sendo declaradas (Explicação detalhada no nosso README)
 
 
 // ----------------------------------------------------------------------------------------------
@@ -129,6 +146,7 @@ char* retorna_string_tipo(TAtomo tipo) {
     else if (tipo == DEF) return "DEF";
     else if (tipo == RETURN) return "RETURN";
     else if (tipo == EXEC) return "EXEC";
+    else if (tipo == FROM) return "FROM";
     else if (tipo == ATRIBUICAO) return "ATRIBUICAO";
     else if (tipo == SOMA) return "SOMA";
     else if (tipo == SUB) return "SUB";
@@ -276,6 +294,7 @@ TInfoAtomo obter_atomo() {
     else if (strcmp(token.lexema, "def") == 0) token.tipo = DEF;
     else if (strcmp(token.lexema, "return") == 0) token.tipo = RETURN;
     else if (strcmp(token.lexema, "exec") == 0) token.tipo = EXEC;
+    else if (strcmp(token.lexema, "from") == 0) token.tipo = FROM;
     else if (strcmp(token.lexema, "=") == 0) token.tipo = ATRIBUICAO;
     else if (strcmp(token.lexema, "+") == 0) token.tipo = SOMA;
     else if (strcmp(token.lexema, "-") == 0) token.tipo = SUB;
@@ -335,10 +354,12 @@ TInfoAtomo obter_atomo() {
 //                                      ANALISADOR SEMÂNTICO
 // ==============================================================================================
 
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= MÉTODOS DE MANIPULAR MINITABELA =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
 TNo* busca_tabela_simbolos(char *lexema) {
     TNo *no = minitabela_de_simbolos;      // Aponta para o nó mais à esquerda na lista encadeada atual
     while (no != NULL) {                   // Percorre a lista encadeada até no máximo chegar no final dela (NULL)
-        if (strcmp((*no).ID, lexema) == 0) { // Verifica se o nó atual representa o identificador/variável com o lexema sendo buscado
+        if ( (strcmp((*no).ID, lexema) == 0) && ((*no).flag_existe == 1) ) { // Verifica se o nó atual representa o identificador/variável com o lexema sendo buscado E se ele já não foi "apagado" (flag_existe = 0)
             return no;                     // Se sim, retorna ele
         }
         no = (*no).prox;                   // Se não, continua para o próximo nó da lista encadeada
@@ -351,35 +372,186 @@ void insere_minitabela_de_simbolos(char *lexema, char *tipo) {
     strcpy((*no).ID, lexema);              // Insere o atributo ID/lexema nele
     strcpy((*no).tipo, tipo);              // Insere o atributo tipo nele
     (*no).endereco = contador_enderecos++; // Insere o atributo endereço nele
+    (*no).flag_existe = 1;                 // Insere o atributo flag_existe nele
+    (*no).flag_usado = 0;                  // Insere o atributo flag_usado nele
 
     (*no).prox = minitabela_de_simbolos;   // Aponta para o nó mais à esquerda na lista encadeada atual
     minitabela_de_simbolos = no;           // Se torna o nó mais à esquerda na lista encadeada atual
 }
 
-void semantico_validar_atribuicao(char *lexema, char *tipo) {
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= MÉTODOS SEMÂNTICOS PRINCIPAIS =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+void semantico_validar_atribuicao(End end_esquerda, End end_direita) {
 
     // ----------- VERIFICA SE JÁ EXISTE ------------
-    TNo *no = busca_tabela_simbolos(lexema); // TODO - Procura esse identificador/variável na minitabela
+    TNo *no = busca_tabela_simbolos(end_esquerda.lexema); // Procura esse identificador/variável na minitabela
 
-    if (no == NULL) {                                // Identificador/variável não existe na minitabela, ou seja, é a primeira declaração dele
-        insere_minitabela_de_simbolos(lexema, tipo); // Adiciona ele na minitabela (essa atribuição é válida)
+    if (no == NULL) {                      // Identificador/variável não existe na minitabela, ou seja, é a primeira declaração dele
+        insere_minitabela_de_simbolos(end_esquerda.lexema, end_direita.tipo); // Adiciona ele na minitabela com o tipo do dado sendo atribuído (essa atribuição é válida)
     } else {
         // ----------- VERIFICA SE TIPO DE DADO MUDOU ------------
-        if (strcmp((*no).tipo, tipo) != 0) {         // Se um tipo de dado DIFERENTE do atual guardado no identificador/variavel estiver sendo atribuído à ele, então é erro
-            printf("ERRO SEMANTICO: linha %d - Tentativa de atribuir dado de tipo %s em variavel de tipo Y\n", lookahead.linha, tipo, (*no).tipo);            
+        if (strcmp((*no).tipo, end_direita.tipo) != 0) { // Se um tipo de dado DIFERENTE do atual guardado no identificador/variavel estiver sendo atribuído à ele, então é erro
+            printf("ERRO SEMANTICO: linha %d - Tentativa de atribuir dado de tipo %s em variável de tipo %s\n", lookahead.linha, end_direita.tipo, (*no).tipo);            
             exit(1);
         }
-        //                                           // (essa atribuição é válida)
+        //                                 // (essa atribuição é válida)
     }
 }
 
+void semantico_validar_operacao(End end_esquerda, End end_direita) {
+
+    // ----------- VERIFICA SE OS DOIS END NÃO SÃO DO MESMO TIPO ------------
+    if (strcmp(end_esquerda.tipo, end_direita.tipo) != 0) { // Se houver tentativa de realizar uma operação entre dois tipos DIFERENTES, então é erro
+        printf("ERRO SEMANTICO: linha %d - Tentativa de realizar uma operação entre dois tipos de dados diferentes (%s e %s)\n", lookahead.linha, end_esquerda.tipo, end_direita.tipo);
+        exit(1);         
+    }
+    //                                     // (essa operação é válida)
+}
+
+End semantico_validar_chamada(End end) {
+
+    // ----------- VERIFICA SE JÁ EXISTE ------------
+    TNo *no = busca_tabela_simbolos(end.lexema); // Procura esse identificador/variável na minitabela
+
+    if (no == NULL) {                      // Identificador/variável não existe na minitabela, ou seja, ele não foi declarado antes de ser chamado, então é erro
+        printf("ERRO SEMANTICO: linha %d - Tentativa de referenciar a variável %s antes dela ser declarada\n", lookahead.linha, end.lexema);
+        exit(1);          
+    }
+    //                                     // (essa chamada/referência é válida)
+    strcpy(end.tipo, (*no).tipo);          // Atualiza o tipo desse end com o tipo armazenado
+    return end;                            // Retorna end atualizado
+}
+
+
+// =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= MÉTODOS SEMÂNTICOS EXTRAS =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+//void semantico_validar_condicao(End end_esquerda) {
+
+    // ----------- VERIFICA SE O END NÃO É TIPO BOOL ------------
+ //   if (strcmp(end_esquerda.tipo, "BOOL") != 0) { // Se uma condição não for tipo BOOL, então é erro
+//        printf("ERRO SEMANTICO: linha %d - Condição inválida, toda condição deve ser tipo BOOL\n", lookahead.linha);
+//        exit(1);         
+//    }
+    //                                     // (essa condição é válida)
+//}
+
+//void semantico_validar_contador(End end) {
+
+//    // ----------- VERIFICA SE O END NÃO É TIPO INT ------------
+//    if (strcmp(end.tipo, "INT") != 0) {    // Se um contador não for tipo INT, então é erro
+ //       printf("ERRO SEMANTICO: linha %d - Contador/índice inválido, todo contador/índice deve ser tipo INT\n", lookahead.linha);
+//        exit(1);         
+ //   }
+    //                                     // (esse contador é válido)
+//}
+
+End semantico_validar_indexacao(End end_esquerda, End end_direita, End end_t) {
+
+    // ----------- VERIFICA SE O TIPO DO END_DIREITA É INT ------------
+    //semantico_validar_contador(end_direita);
+
+    // ----------- VERIFICA SE O TIPO DO END_ESQUERDA É INTLIS ------------
+    if (strcmp(end_esquerda.tipo, "INTLIS") == 0) { // Se é uma LISTA DE INTEIROS (ou seja, tipo INTLIS) sendo indexada, ...
+        strcpy(end_t.tipo, "INT");         // ...então a indexação é válida E o elemento sendo chamado/referenciado é tipo INT.
+        return end_t;                      // Retorna end_t (elemento sendo chamado/referenciado) com o seu tipo atualizado
+    }
+    // ----------- VERIFICA SE O TIPO DO END_ESQUERDA É INTTUP ------------
+    else if (strcmp(end_esquerda.tipo, "INTTUP") == 0) { // Se é uma TUPLA DE INTEIROS (ou seja, tipo INTTUP) sendo indexada, ...
+        strcpy(end_t.tipo, "INT");        // ...então a indexação é válida E o elemento sendo chamado/referenciado é tipo INT.
+        return end_t;                     // Retorna end_t (elemento sendo chamado/referenciado) com o seu tipo atualizado
+    }
+    // ----------- VERIFICA SE O TIPO DO END_ESQUERDA É BOLLIS ------------
+    else if (strcmp(end_esquerda.tipo, "BOLLIS") == 0) { // Se é uma LISTA DE BOOLEANOS (ou seja, tipo BOLLIS) sendo indexada, ...
+        strcpy(end_t.tipo, "BOOL");       // ...então a indexação é válida E o elemento sendo chamado/referenciado é tipo BOOL.
+        return end_t;                     // Retorna end_t (elemento sendo chamado/referenciado) com o seu tipo atualizado
+    }
+    // ----------- VERIFICA SE O TIPO DO END_ESQUERDA É BOLTUP ------------
+    else if (strcmp(end_esquerda.tipo, "BOLTUP") == 0) { // Se é uma TUPLA DE BOOLEANOS (ou seja, tipo BOLTUP) sendo indexada, ...
+        strcpy(end_t.tipo, "BOOL");       // ...então a indexação é válida E o elemento sendo chamado/referenciado é tipo BOOL.
+        return end_t;                     // Retorna end_t (elemento sendo chamado/referenciado) com o seu tipo atualizado
+    }
+    //                                     // (se a variável sendo indexada não for nenhum dos tipos acima, então é erro)
+    printf("ERRO SEMANTICO: linha %d - Tentativa de indexar a variável '%s' tipo %s. É obrigatório que seja tipo INTLIS, INTTUP, BOLLIS ou BOLTUP\n", lookahead.linha, end_esquerda.lexema, end_esquerda.tipo);
+    exit(1);
+
+}
+
+void semantico_validar_atribuicao_indexada(End end_vetor, End end_indice, End end_valor) {
+    
+    End end_t;                             // End auxiliar e temporário
+    end_t.lexema[0] = '\0';                // "Flag" para lexema "nulo"
+    end_t = semantico_validar_indexacao(end_vetor, end_indice, end_t);
+
+    // ----------- VERIFICA SE OS DOIS END NÃO SÃO DO MESMO TIPO ------------
+    if (strcmp(end_t.tipo, end_valor.tipo) != 0) {
+        printf("ERRO SEMANTICO: linha %d - Tentativa de atribuir o valor '%s' tipo %s a um 'conjunto' que apenas aceita elementos tipo %s\n", lookahead.linha, end_valor.lexema, end_valor.tipo, end_t.tipo);
+        exit(1);
+    }
+    //                                     // (essa atribuição é válida)
+
+}
+
+semantico_validar_declaracao_conjunto(int vetor_ou_tupla, End end_valor) {
+
+    // ----------- VERIFICA SE JÁ EXISTE ------------
+    TNo *no = busca_tabela_simbolos(conjunto_sendo_declarado.lexema); // Procura esse vetor/tupla na minitabela
+
+    if (no == NULL) {                      // Vetor/tupla não existe na minitabela, ou seja, é a primeira declaração dele
+        
+        if (strcmp(end_valor.tipo, "INT") == 0) {
+            if (vetor_ou_tupla) {          // vetor
+                strcpy(conjunto_sendo_declarado.tipo, "INTLIS");
+            } else {                       // tupla
+                strcpy(conjunto_sendo_declarado.tipo, "INTTUP");
+            }
+        }
+        if (strcmp(end_valor.tipo, "BOOL") == 0) {
+            if (vetor_ou_tupla) {          // vetor
+                strcpy(conjunto_sendo_declarado.tipo, "BOLLIS");
+            } else {                       // tupla
+                strcpy(conjunto_sendo_declarado.tipo, "BOLTUP");
+            }
+        }
+        
+        insere_minitabela_de_simbolos(conjunto_sendo_declarado.lexema, conjunto_sendo_declarado.tipo); // Adiciona ele na minitabela com o tipo do dado sendo atribuído (essa atribuição é válida)
+    
+    } else {                               // Vetor/tupla já possui um tipo de dado definido na minitabela que não pode mais mudar
+
+        // ----------- VERIFICA SE TIPO DE DADO MUDOU ------------
+        if ( (strcmp((*no).tipo, "INTLIS") == 0) && (strcmp(end_valor.tipo, "INT") == 0) ) {         // INTLIS deve ter INT
+        } else if ( (strcmp((*no).tipo, "INTTUP") == 0) && (strcmp(end_valor.tipo, "INT") == 0) ) {  // INTTUP deve ter INT
+        } else if ( (strcmp((*no).tipo, "BOLLIS") == 0) && (strcmp(end_valor.tipo, "BOOL") == 0) ) { // BOLLIS deve ter BOOL
+        } else if ( (strcmp((*no).tipo, "BOLTUP") == 0) && (strcmp(end_valor.tipo, "BOOL") == 0) ) { // BOLTUP deve ter BOOL
+        } else {
+            printf("ERRO SEMANTICO: linha %d - Tentativa de atribuir dado de tipo %s em vetor/tupla de tipo %s\n", lookahead.linha, end_valor.tipo, (*no).tipo);            
+            exit(1);    
+        }
+        //                                 // (essa atribuição é válida)
+    }
+}
+
+void semantico_proibir_strings(){          // (Explicação detalhada no nosso README)
+    if (!flag_pode_string) {               // Se a flag_pode_string for 0, significa que uma STRING foi encontrada fora de um print, então é erro
+        printf("ERRO SEMANTICO: linha %d - Tipo de dado STRING é desconhecido no código, exceto dentro de um print (Explicação detalhada no nosso README)\n", lookahead.linha);
+        exit(1);
+    }
+    //                                     // (EXCEÇÃO: Se um print estiver sendo construído, ele reconhece o tipo de dado STRING)
+}
+
+// ==============================================================================================
+//               (FUNÇÕES AUXILIARES DO) GERADOR DE CÓDIGO INTERMEDIÁRIO (G.C.I.)
+// ==============================================================================================
+int proximo_rotulo_t() {
+    return contador_proximo_rotulo_t++;
+}
+int proximo_rotulo_l() {
+    return contador_proximo_rotulo_l++;
+}
 
 // ==============================================================================================
 //                                      ANALISADOR SINTÁTICO
 // ==============================================================================================
-
-// Variável global lookahed do Sintático
-TInfoAtomo lookahead;
 
 // Protótipos das funções (necessário porque elas chamam umas às outras)
 void lista_instrucoes();
@@ -393,43 +565,43 @@ void input_aux();
 void def();
 void exec();
 void identificadores();
-void lista_imprimivel();
-void chama_id();
-void lista_argumentos();
-void expressao();
-void exp_or();
-void exp_and();
-void exp_comp();
-void exp_aritmetica();
-void termo();
-void fator();
-void primario();
+int lista_imprimivel();
+End chama_id();
+int lista_argumentos(int, int);
+End expressao();
+End exp_or();
+End exp_and();
+End exp_comp();
+End exp_aritmetica();
+End termo();
+End fator();
+End primario();
 void primario_aux();
 void lista_declaracao();
-void op_comp();
-void op_soma();
-void op_mult();
-void op_unico();
+Op op_comp();
+Op op_soma();
+Op op_mult();
+Op op_unico();
 void tupla();
 void tupla_aux();
-void exp_aritmetica_aux();
-void if_aux();
+End exp_aritmetica_aux(End);
+void if_aux(int);
 void lista_instrucoes_aux();
 void def_aux();
 void lista_declaracao_aux();
 void print_aux();
 void lista_ids();
 void lista_ids_aux();
-void lista_imprimivel_aux();
-void chama_id_aux();
-void chamada_funcao_aux();
-void identificadores_aux();
-void lista_argumentos_aux();
-void exp_or_aux();
-void exp_and_aux();
-void exp_comp_aux();
-void termo_aux();
-void elif();
+int lista_imprimivel_aux();
+End chama_id_aux(End);
+void chamada_funcao_aux(End);
+void identificadores_aux(End);
+int lista_argumentos_aux(int, int);
+End exp_or_aux(End);
+End exp_and_aux(End);
+End exp_comp_aux(End);
+End termo_aux(End);
+void elif(int);
 
 
 // -------------------- FUNÇÃO AUXILIAR PARA IMPRESSÃO DOS ERROS SINTÁTICOS  --------------------
@@ -507,6 +679,17 @@ void input_aux() {                                   // INPUT_AUX -> EXPRESSAO |
 
 void def() {                                         // DEF -> def IDENTIFICADOR '(' DEF_AUX
     consome(DEF);
+
+    End end;                                         // G.C.I.: Salva lexema do end antes do consome()
+    strcpy(end.lexema, lookahead.lexema);
+    end.tipo[0] = '\0';                              // G.C.I.: "Flag" para tipo "nulo"
+ 
+    // ----------------- ANÁLISE SEMÂNTICA -----------------
+    if (busca_tabela_simbolos(end.lexema) == NULL) {
+        insere_minitabela_de_simbolos(end.lexema, "INT"); // G.C.I.: FACILITAÇÃO: ASSUME QUE FUNÇÕES APENAS RETORNAM INT
+    }
+    // -----------------------------------------------------
+
     consome(IDENTIFICADOR);
     consome(ABRE_PAR);
     def_aux();
@@ -530,8 +713,12 @@ void def_aux() {                                     // DEF_AUX -> LISTA_IDS ')'
 void exec() {                                        // EXEC -> exec '(' EXPRESSAO ')'
     consome(EXEC);
     consome(ABRE_PAR);
-    expressao();
+
+    End end = expressao();                           // G.C.I.: Solicita end
+
     consome(FECHA_PAR);
+
+    fprintf(instrucoes, "exec %s\n", end.lexema);    // G.C.I.: Escreve no arquivo a instrução "exec end"
 }
 
 void print() {                                       // PRINT -> print '(' PRINT_AUX
@@ -543,8 +730,23 @@ void print() {                                       // PRINT -> print '(' PRINT
 void print_aux() {                                   // PRINT_AUX -> ')' | LISTA_IMPRIMIVEL ')'
     if (lookahead.tipo == FECHA_PAR) {
         consome(FECHA_PAR);
+
+        fprintf(instrucoes, "call print, 0\n");      // G.C.I.: Escreve no arquivo a instrução "call p, n" (apesar de que, nesse caso, já sabemos que é "print, 0")
+
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        lista_imprimivel();
+       
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        flag_pode_string = 1; // EXCEÇÃO DO PRINT: Strings não existem no resto do código e são proibidas, APENAS existem em prints
+        // ---------------------------------------------------
+
+        int numero_parametros = lista_imprimivel();  // G.C.I.: Solicita número de parâmetros
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        flag_pode_string = 0; // EXCEÇÃO DO PRINT: Strings não existem no resto do código e são proibidas, APENAS existem em prints
+        // ---------------------------------------------------
+
+        fprintf(instrucoes, "call print, %d\n", numero_parametros); // G.C.I.: Escreve no arquivo a instrução "call p, n" (apesar de que, nesse caso, já sabemos que é "print")
+
         consome(FECHA_PAR);
     } else {
         erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
@@ -553,15 +755,34 @@ void print_aux() {                                   // PRINT_AUX -> ')' | LISTA
 
 void iff(){                                          // IF -> if EXPRESSAO ':' INSTRUCAO IF_AUX
     consome(IF);
-    expressao();
+
+    int true_l = proximo_rotulo_l();                 // G.C.I.: Cria o label para o caso do if ser true
+    int false_l = proximo_rotulo_l();                // G.C.I.: Cria o label para o caso do if ser false
+    int fim_l = proximo_rotulo_l();                  // G.C.I.: Cria o label final/next (após o if, todos os elif e o else)
+
+    End end = expressao();                           // G.C.I.: Solicita end
+
+    // ----------------- ANÁLISE SEMÂNTICA -----------------
+    //semantico_validar_condicao(end);
+    // -----------------------------------------------------
+
+    fprintf(instrucoes, "if %s goto L%d\n", end.lexema, true_l); // G.C.I.: Escreve no arquivo a instrução "if end goto Ln" (true)
+    fprintf(instrucoes, "goto L%d\n", false_l);      // G.C.I.: Escreve no arquivo a instrução "goto Ln" (false)
+
+    fprintf(instrucoes, "L%d:\n", true_l);           // G.C.I.: Escreve no arquivo a label "Ln:" (true)
     consome(DOIS_PONTOS);
     instrucao();
-    if_aux();
+    fprintf(instrucoes, "goto L%d\n", fim_l);        // G.C.I.: Escreve no arquivo a instrução "goto Ln" (fim/next)
+
+    fprintf(instrucoes, "L%d:\n", false_l);          // G.C.I.: Escreve no arquivo a label "Ln:" (false)
+    if_aux(fim_l);                                   // G.C.I.: Passa label (fim/next) "para baixo"
+
+    fprintf(instrucoes, "L%d:\n", fim_l);            // G.C.I.: Escreve no arquivo a label "Ln:" (fim/next)
 }
 
-void if_aux() {                                      // IF_AUX -> ELIF | else ':' INSTRUCAO | ε
+void if_aux(int fim_l) {                             // IF_AUX -> ELIF | else ':' INSTRUCAO | ε
     if (lookahead.tipo == ELIF) {
-        elif();
+        elif(fim_l);
     }
     if (lookahead.tipo == ELSE) {
         consome(ELSE);
@@ -571,78 +792,191 @@ void if_aux() {                                      // IF_AUX -> ELIF | else ':
     //                                               // IF_AUX -> ε
 }
 
-void elif() {                                        // ELIF -> elif EXPRESSAO ':' INSTRUCAO IF_AUX  
+void elif(int fim_l) {                               // ELIF -> elif EXPRESSAO ':' INSTRUCAO IF_AUX  
     consome(ELIF);
-    expressao();
+
+    int true_l = proximo_rotulo_l();                 // G.C.I.: Cria o label para o caso do if ser true
+    int false_l = proximo_rotulo_l();                // G.C.I.: Cria o label para o caso do if ser false
+
+    End end = expressao();                           // G.C.I.: Solicita end
+
+    // ----------------- ANÁLISE SEMÂNTICA -----------------
+    //semantico_validar_condicao(end);
+    // -----------------------------------------------------
+
+    fprintf(instrucoes, "if %s goto L%d\n", end.lexema, true_l); // G.C.I.: Escreve no arquivo a instrução "if end goto Ln" (true)
+    fprintf(instrucoes, "goto L%d\n", false_l);      // G.C.I.: Escreve no arquivo a instrução "goto Ln" (false)
+
+    fprintf(instrucoes, "L%d:\n", true_l);           // G.C.I.: Escreve no arquivo a label "Ln:" (true)
     consome(DOIS_PONTOS);
     instrucao();
-    if_aux();
+    fprintf(instrucoes, "goto L%d\n", fim_l);        // G.C.I.: Escreve no arquivo a instrução "goto Ln" (fim/next)
+
+    fprintf(instrucoes, "L%d:\n", false_l);          // G.C.I.: Escreve no arquivo a label "Ln:" (false)
+    if_aux(fim_l);                                   // G.C.I.: Passa label (fim/next) "para baixo"
 }
 
 void whilee() {                                      // WHILE -> while EXPRESSAO ':' INSTRUCAO
     consome(WHILE);
-    expressao();
+
+    int inicio_l = proximo_rotulo_l();               // G.C.I.: Cria o label para voltar para si mesmo
+    int true_l = proximo_rotulo_l();                 // G.C.I.: Cria o label para o caso do if ser true
+    int false_l = proximo_rotulo_l();                // G.C.I.: Cria o label para o caso do if ser false
+
+    End end = expressao();                           // G.C.I.: Solicita end
+    
+    // ----------------- ANÁLISE SEMÂNTICA -----------------
+    //semantico_validar_condicao(end);
+    // -----------------------------------------------------
+    
+    fprintf(instrucoes, "L%d:\n", inicio_l);         // G.C.I.: Escreve no arquivo a label "Ln:" (inicio)
+    fprintf(instrucoes, "if %s goto L%d\n", end.lexema, true_l); // G.C.I.: Escreve no arquivo a instrução "if end goto Ln" (true)
+    fprintf(instrucoes, "goto L%d\n", false_l);      // G.C.I.: Escreve no arquivo a instrução "goto Ln" (false)
+
+    fprintf(instrucoes, "L%d:\n", true_l);           // G.C.I.: Escreve no arquivo a label "Ln:" (true)
     consome(DOIS_PONTOS);
     instrucao();
+    fprintf(instrucoes, "goto L%d\n", inicio_l);     // G.C.I.: Escreve no arquivo a instrução "goto Ln" (inicio)
+
+    fprintf(instrucoes, "L%d:\n", false_l);          // G.C.I.: Escreve no arquivo a label "Ln:" (false)
 }
 
 void forr() {                                        // FOR -> for IDENTIFICADOR in range '(' EXPRESSAO ')' ':' INSTRUCAO
     consome(FOR);
-    consome(IDENTIFICADOR);
-    consome(IN);
-    consome(RANGE);
-    consome(ABRE_PAR);
-    expressao();
-    consome(FECHA_PAR);
-    consome(DOIS_PONTOS);
-    instrucao();
-}
-
-void identificadores() {                             // IDENTIFICADORES -> IDENTIFICADOR IDENTIFICADORES_AUX
-
+    
+    int inicio_l = proximo_rotulo_l();               // G.C.I.: Cria o label para voltar para si mesmo
+    int true_l = proximo_rotulo_l();                 // G.C.I.: Cria o label para o caso do if ser true
+    int false_l = proximo_rotulo_l();                // G.C.I.: Cria o label para o caso do if ser false
+    
     End end_esquerda;                                // G.C.I.: Salva lexema do end_esquerda antes do consome()
     strcpy(end_esquerda.lexema, lookahead.lexema);
     end_esquerda.tipo[0] = '\0';                     // G.C.I.: "Flag" para tipo "nulo"
+    
+    consome(IDENTIFICADOR);
+    
+    // ----------------- ANÁLISE SEMÂNTICA ----------------
+    end_esquerda = semantico_validar_chamada(end_esquerda); // G.C.I.: Atualiza o end_esquerda com o seu tipo guardado na minitabela
+    //semantico_validar_contador(end_esquerda);
+    // ----------------------------------------------------
+    
+    consome(IN);
+    consome(RANGE);
+    consome(ABRE_PAR);
+    
+    End end_direita = expressao();                   // G.C.I.: Solicita end_direita
+    
+    // ----------------- ANÁLISE SEMÂNTICA -----------------
+    //semantico_validar_contador(end_direita);
+    // -----------------------------------------------------
+    
+    
+    fprintf(instrucoes, "L%d:\n", inicio_l);         // G.C.I.: Escreve no arquivo a label "Ln:" (inicio)
+    
+    End end_t_comp;                                 // G.C.I.: Cria o nome temporário para escrever a instruçõa
+    sprintf(end_t_comp.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+    strcpy(end_t_comp.tipo, "BOOL");                // G.C.I.: O tipo de uma condição é sempre BOOL
+    fprintf(instrucoes, "%s = %s < %s\n", end_t_comp.lexema, end_esquerda.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t_comp = end_esquerda < end_direita"
+    
+    fprintf(instrucoes, "if %s goto L%d\n", end_t_comp.lexema, true_l); // G.C.I.: Escreve no arquivo a instrução "if end goto Ln" (true)
+    fprintf(instrucoes, "goto L%d\n", false_l);     // G.C.I.: Escreve no arquivo a instrução "goto Ln" (false)
+
+
+
+    fprintf(instrucoes, "L%d:\n", true_l);           // G.C.I.: Escreve no arquivo a label "Ln:" (true)
+    consome(FECHA_PAR);
+    consome(DOIS_PONTOS);
+    instrucao();
+
+    End end_t_incr;     
+    sprintf(end_t_incr.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Atualiza o lexema com proximo_rotulo_t()
+    fprintf(instrucoes, "%s = %s + 1\n", end_t_incr.lexema, end_esquerda.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t_incr = end_esquerda + 1"
+    fprintf(instrucoes, "%s = %s\n", end_esquerda.lexema, end_t_incr.lexema); // G.C.I.: Escreve no arquivo a instrução "end_esquerda = end_t_incr"
+
+    fprintf(instrucoes, "goto L%d\n", inicio_l);     // G.C.I.: Escreve no arquivo a instrução "goto Ln" (inicio)
+
+
+
+    fprintf(instrucoes, "L%d:\n", false_l);          // G.C.I.: Escreve no arquivo a label "Ln:" (false)
+}
+
+void identificadores() {                             // IDENTIFICADORES -> IDENTIFICADOR IDENTIFICADORES_AUX
+    End end;                                         // G.C.I.: Salva lexema do end antes do consome()
+    strcpy(end.lexema, lookahead.lexema);
+    end.tipo[0] = '\0';                              // G.C.I.: "Flag" para tipo "nulo"
 
     consome(IDENTIFICADOR);
 
-    identificadores_aux(end_esquerda);               // G.C.I.: Passa end_esquerda "para baixo" p/ op
+    identificadores_aux(end);                        // G.C.I.: Passa end "para baixo"
 }
 
-void identificadores_aux(End end_esquerda) {       // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX
+void identificadores_aux(End end_esquerda) {         // IDENTIFICADORES_AUX -> '=' EXPRESSAO | '[' EXPRESSAO ']' '=' EXPRESSAO | '(' CHAMADA_FUNCAO_AUX
     if (lookahead.tipo == ATRIBUICAO) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é =)
+        strcpy(op.lexema, "=");
+
         consome(ATRIBUICAO);
 
-        // TODO: essa linha é um rascunho ainda, n terminei a recursão
+        // G.C.I.: FACILITAÇÃO PARA O CASO DE DECLARAÇÃO DE LISTAS E TUPLAS --------------
+        conjunto_sendo_declarado = end_esquerda; // (Explicação detalhada no nosso README)
+        // -------------------------------------------------------------------------------
+
         End end_direita = expressao();               // G.C.I.: Solicita end_direita
 
-        // ----------------------- ANÁLISE SEMÂNTICA -----------------------
-        semantico_validar_atribuicao(end_esquerda.lexema, end_direita.tipo);
-        // -----------------------------------------------------------------
+        // ----------------- ANÁLISE SEMÂNTICA -----------------
+        semantico_validar_atribuicao(end_esquerda, end_direita);
+        // -----------------------------------------------------
 
-        fprintf(instrucoes, "%s = %s\n", end_esquerda.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_esquerda = end_direita"
+        fprintf(instrucoes, "%s %s %s\n", end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_esquerda = end_direita"
 
     } else if (lookahead.tipo == ABRE_COL) {
-        printf("\nTeste\n");
         consome(ABRE_COL);
-        expressao();
+
+        End identificador = end_esquerda;        // G.C.I.: Mudando nomenclatura porque o lado esquerdo da declaração de vetores é muito direto e pouco recursivo
+
+        End indice = expressao();                // G.C.I.: Solicita indice (nomenclatura diferente seguindo explicação acima)
+        
         consome(FECHA_COL);
         consome(ATRIBUICAO);
-        expressao();
+
+        End valor = expressao();                 // G.C.I.: Solicita valor (nomenclatura diferente seguindo explicação acima)
+
+        // ----------------- ANÁLISE SEMÂNTICA -----------------
+        identificador = semantico_validar_chamada(identificador); // G.C.I.: Atualiza o identificador com o seu tipo guardado na minitabela
+        semantico_validar_atribuicao_indexada(identificador, indice, valor);
+        // -----------------------------------------------------
+
+        fprintf(instrucoes, "%s[%s] = %s\n", identificador.lexema, indice.lexema, valor.lexema); // G.C.I.: Escreve no arquivo a instrução "identificador[indice] = valor"
+
     } else if (lookahead.tipo == ABRE_PAR) {
         consome(ABRE_PAR);
-        chamada_funcao_aux();
+        chamada_funcao_aux(end_esquerda);
     } else {
         erro_sintatico("Esperado '=', '[' ou '('");  // ERRO SINTÁTICO
     }
 }
 
-void chamada_funcao_aux() {                          // CHAMADA_FUNCAO_AUX -> ')' | LISTA_ARGUMENTOS ')'
+void chamada_funcao_aux(End end_esquerda) {          // CHAMADA_FUNCAO_AUX -> ')' | LISTA_ARGUMENTOS ')'
     if (lookahead.tipo == FECHA_PAR) {
         consome(FECHA_PAR);
+        // --------- ANÁLISE SEMÂNTICA ---------
+        semantico_validar_chamada(end_esquerda);
+        // -------------------------------------
+        fprintf(instrucoes, "call %s, 0\n", end_esquerda.lexema); // G.C.I.: Escreve no arquivo a instrução "call end_esquerda, n" (apesar de que, nesse caso, já sabemos que é "0")
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        lista_argumentos();
+        
+        // --------- ANÁLISE SEMÂNTICA ---------
+        semantico_validar_chamada(end_esquerda);
+        // -------------------------------------
+
+        int indice_atual = 0;                       // G.C.I.: Declaração de tupla começa no índice 0
+        int flag_func = 2;                          // G.C.I.: Flag de que é chamada de função 
+
+        int numero_parametros = lista_argumentos(indice_atual, flag_func);  // G.C.I.: Passa indice_atual e flag_func "para baixo"
         consome(FECHA_PAR);
+
+        fprintf(instrucoes, "call %s, %d\n", end_esquerda.lexema, numero_parametros); // G.C.I.: Escreve no arquivo a instrução "call p, n"
+
     } else {
         erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
     }
@@ -661,146 +995,312 @@ void lista_ids_aux() {                               // LISTA_IDS_AUX -> ',' LIS
     //                                               // LISTA_IDS_AUX -> ε
 }
 
-void lista_imprimivel() {                            // LISTA_IMPRIMIVEL -> EXPRESSAO LISTA_IMPRIMIVEL_AUX
-    expressao();
-    lista_imprimivel_aux();
+int lista_imprimivel() {                             // LISTA_IMPRIMIVEL -> EXPRESSAO LISTA_IMPRIMIVEL_AUX
+    End end = expressao();                           // G.C.I.: Solicita end
+
+    fprintf(instrucoes, "param %s\n", end.lexema);   // G.C.I.: Escreve no arquivo a instrução "param end"
+
+    return 1 + lista_imprimivel_aux();               // G.C.I.: Conta +1 no número de parâmetros e procura se tem mais, depois passa o resultado "para cima"
 }
 
-void lista_imprimivel_aux() {                        // LISTA_IMPRIMIVEL_AUX -> ',' LISTA_IMPRIMIVEL | ε
+int lista_imprimivel_aux() {                        // LISTA_IMPRIMIVEL_AUX -> ',' LISTA_IMPRIMIVEL | ε
     if (lookahead.tipo == VIRGULA) {
         consome(VIRGULA);
-        lista_imprimivel();
+        return lista_imprimivel();                  // G.C.I.: Passa número de parâmetros contado até agora "para cima"
     }
     //                                               // LISTA_IMPRIMIVEL_AUX -> ε
+    return 0;                                        // G.C.I.: Faz nada e não soma mais no número de parâmetros, encerrando a contagem
 }
 
-void lista_argumentos() {                            // LISTA_ARGUMENTOS -> EXPRESSAO LISTA_ARGUMENTOS_AUX
-    expressao();
-    lista_argumentos_aux();
+int lista_argumentos(int indice_atual, int vetor_ou_tupla_ou_func) { // LISTA_ARGUMENTOS -> EXPRESSAO LISTA_ARGUMENTOS_AUX
+    End end_valor = expressao();
+
+    if (vetor_ou_tupla_ou_func == 2) {              // G.C.I.: Se é a chamada de uma função que está sendo construída, utiliza-se param
+        fprintf(instrucoes, "param %s\n", end_valor.lexema); // G.C.I.: Escreve no arquivo a instrução "param end_valor"
+    }
+    else {                                          // G.C.I.: Se é uma lista ou uma tupla que está sendo construída, utiliza-se instrução indexada
+        // ----------------- ANÁLISE SEMÂNTICA -----------------
+        semantico_validar_declaracao_conjunto(vetor_ou_tupla_ou_func, end_valor);
+        // -----------------------------------------------------
+        fprintf(instrucoes, "%s[%d] = %s\n", conjunto_sendo_declarado.lexema, indice_atual, end_valor.lexema); // G.C.I.: Escreve no arquivo a instrução "conjunto_sendo_declarado[indice_atual] = end_valor"
+    }
+
+    int numero_parametros = lista_argumentos_aux(indice_atual + 1, vetor_ou_tupla_ou_func);
+
+    return numero_parametros;
 }
 
-void lista_argumentos_aux() {                        // LISTA_ARGUMENTOS_AUX -> ',' LISTA_ARGUMENTOS | ε
+int lista_argumentos_aux(int indice_atual, int vetor_ou_tupla_ou_func) { // LISTA_ARGUMENTOS_AUX -> ',' LISTA_ARGUMENTOS | ε
     if (lookahead.tipo == VIRGULA) {
         consome(VIRGULA);
-        lista_argumentos();
+        return lista_argumentos(indice_atual, vetor_ou_tupla_ou_func);
     }
     //                                               // LISTA_ARGUMENTOS_AUX -> ε
+    return indice_atual;                             // G.C.I.: Faz nada e não soma mais no número de parâmetros, encerrando a contagem
 }
 
 End expressao() {                                   // EXPRESSAO -> EXP_OR
-    return exp_or();
+    return exp_or();                                // G.C.I.: Passa end "para cima"
 }
 
 End exp_or() {                                      // EXP_OR -> EXP_AND EXP_OR_AUX
-    exp_and();
-    exp_or_aux();
+    End end = exp_and();                            // G.C.I.: Solicita end
+    return exp_or_aux(end);                         // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void exp_or_aux() {                                  // EXP_OR_AUX -> or EXP_AND EXP_OR_AUX | ε
+End exp_or_aux(End end_esquerda) {                  // EXP_OR_AUX -> or EXP_AND EXP_OR_AUX | ε
     if (lookahead.tipo == OR) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é or)
+        strcpy(op.lexema, "or");
+
         consome(OR);
-        exp_and();
-        exp_or_aux();
+
+        End end_direita = exp_and();                 // G.C.I.: Solicita end_direita
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_validar_operacao(end_esquerda, end_direita);
+        // ---------------------------------------------------
+
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, "BOOL");                  // G.C.I.: O tipo resultante de uma comparação é sempre BOOL
+
+        fprintf(instrucoes, "%s = %s %s %s\n", end_t.lexema, end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda op end_direita"
+
+        return exp_or_aux(end_t);                    // G.C.I.: Passa end_t "para baixo" E passa o end resultante "para cima"
     }
     //                                               // EXP_OR_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
-void exp_and() {                                     // EXP_AND -> EXP_COMP EXP_AND_AUX
-    exp_comp();
-    exp_and_aux();
+End exp_and() {                                     // EXP_AND -> EXP_COMP EXP_AND_AUX
+    End end = exp_comp();                           // G.C.I.: Solicita end
+    return exp_and_aux(end);                        // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void exp_and_aux() {                                 // EXP_AND_AUX -> and EXP_COMP EXP_AND_AUX | ε
+End exp_and_aux(End end_esquerda) {                  // EXP_AND_AUX -> and EXP_COMP EXP_AND_AUX | ε
     if (lookahead.tipo == AND) {
+        
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é and)
+        strcpy(op.lexema, "and");
+
         consome(AND);
-        exp_comp();
-        exp_and_aux();
+
+        End end_direita = exp_comp();                // G.C.I.: Solicita end_direita
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_validar_operacao(end_esquerda, end_direita);
+        // ---------------------------------------------------
+
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, "BOOL");                  // G.C.I.: O tipo resultante de uma comparação é sempre BOOL
+
+        fprintf(instrucoes, "%s = %s %s %s\n", end_t.lexema, end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda op end_direita"
+
+        return exp_and_aux(end_t);                   // G.C.I.: Passa end_t "para baixo" E passa o end resultante "para cima"
     }
     //                                               // EXP_AND_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
-void exp_comp() {                                    // EXP_COMP -> EXP_ARITMETICA EXP_COMP_AUX
-    exp_aritmetica();
-    exp_comp_aux();
+End exp_comp() {                                    // EXP_COMP -> EXP_ARITMETICA EXP_COMP_AUX
+    End end = exp_aritmetica();                     // G.C.I.: Solicita end
+    return exp_comp_aux(end);                       // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void exp_comp_aux() {                                // EXP_COMP_AUX -> OP_COMP EXP_ARITMETICA EXP_COMP_AUX | ε
+End exp_comp_aux(End end_esquerda) {                                // EXP_COMP_AUX -> OP_COMP EXP_ARITMETICA EXP_COMP_AUX | ε
     if (lookahead.tipo == IGUAL || lookahead.tipo == DIFERENTE || lookahead.tipo == MENOR || lookahead.tipo == MAIOR || lookahead.tipo == MENOR_IGUAL || lookahead.tipo == MAIOR_IGUAL || lookahead.tipo == IS || lookahead.tipo == IN) {
-        op_comp();
-        exp_aritmetica();
-        exp_comp_aux();
+        
+        Op op = op_comp();                           // G.C.I.: Solicita op
+
+        End end_direita = exp_aritmetica();          // G.C.I.: Solicita end_direita
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_validar_operacao(end_esquerda, end_direita);
+        // ---------------------------------------------------
+
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, "BOOL");                  // G.C.I.: O tipo resultante de uma comparação é sempre BOOL
+
+        fprintf(instrucoes, "%s = %s %s %s\n", end_t.lexema, end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda op end_direita"
+
+        return exp_comp_aux(end_t);                  // G.C.I.: Passa end_t "para baixo" E passa o end resultante "para cima"
     }
     //                                               // EXP_COMP_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
-void exp_aritmetica() {                              // EXP_ARITMETICA -> TERMO EXP_ARITMETICA_AUX
-    termo();
-    exp_aritmetica_aux();
+End exp_aritmetica() {                               // EXP_ARITMETICA -> TERMO EXP_ARITMETICA_AUX
+    End end = termo();                               // G.C.I.: Solicita end
+    return exp_aritmetica_aux(end);                  // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void exp_aritmetica_aux() {                          // EXP_ARITMETICA_AUX -> OP_SOMA TERMO EXP_ARITMETICA_AUX | ε
+End exp_aritmetica_aux(End end_esquerda) {           // EXP_ARITMETICA_AUX -> OP_SOMA TERMO EXP_ARITMETICA_AUX | ε
     if (lookahead.tipo == SOMA || lookahead.tipo == SUB) {
-        op_soma();
-        termo();
-        exp_aritmetica_aux();
+
+        Op op = op_soma();                           // G.C.I.: Solicita op
+
+        End end_direita = termo();                   // G.C.I.: Solicita end_direita
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_validar_operacao(end_esquerda, end_direita);
+        // ---------------------------------------------------
+
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, end_esquerda.tipo);       // G.C.I.: Tanto faz copiar o tipo do end_esquerda ou do end_direita pq a análise semântica confirmou que os dois são do mesmo tipo
+
+        fprintf(instrucoes, "%s = %s %s %s\n", end_t.lexema, end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda op end_direita"
+
+        return exp_aritmetica_aux(end_t);            // G.C.I.: Passa end_t "para baixo" E passa o end resultante "para cima"
     }
     //                                               // EXP_ARITMETICA_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
-void termo() {                                       // TERMO -> FATOR TERMO_AUX
-    fator();
-    termo_aux();
+End termo() {                                        // TERMO -> FATOR TERMO_AUX
+    End end = fator();                               // G.C.I.: Solicita end
+    return termo_aux(end);                           // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void termo_aux() {                                   // TERMO_AUX -> OP_MULT FATOR TERMO_AUX | ε
+End termo_aux(End end_esquerda) {                    // TERMO_AUX -> OP_MULT FATOR TERMO_AUX | ε
     if (lookahead.tipo == MULT || lookahead.tipo == DIV || lookahead.tipo == MOD) {
-        op_mult();
-        fator();
-        termo_aux();
+
+        Op op = op_mult();                            // G.C.I.: Solicita op
+
+        End end_direita = fator();                   // G.C.I.: Solicita end_direita
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_validar_operacao(end_esquerda, end_direita);
+        // ---------------------------------------------------
+
+        End end_t;                                  // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, end_esquerda.tipo);       // G.C.I.: Tanto faz copiar o tipo do end_esquerda ou do end_direita pq a análise semântica confirmou que os dois são do mesmo tipo
+
+        fprintf(instrucoes, "%s = %s %s %s\n", end_t.lexema, end_esquerda.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda op end_direita"
+        
+        return termo_aux(end_t);                     // G.C.I.: Passa end_t "para baixo" E passa o end resultante "para cima"
     }
     //                                               // TERMO_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
-void fator() {                                       // FATOR -> OP_UNICO FATOR | PRIMARIO
+End fator() {                                       // FATOR -> OP_UNICO FATOR | PRIMARIO
     if (lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        op_unico();
-        fator();
+        
+        Op op = op_unico();                         // G.C.I.: Solicita op
+
+        End end_direita = fator();                  // G.C.I.: Solicita end_direita
+
+        End end_t;                                  // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, end_direita.tipo);       // G.C.I.: Cria o tipo com o seu tipo
+
+        fprintf(instrucoes, "%s = %s %s\n", end_t.lexema, op.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = op end_direita"
+
+        return end_t;                               // G.C.I.: Passa end_t "para cima"
+
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == INPUT || lookahead.tipo == ABRE_PAR) {
-        primario();
+        return primario();                          // G.C.I.: Passa end "para cima"
     } else {
         erro_sintatico("Esperado operador único ou primário"); // ERRO SINTÁTICO
     }
 }
 
-void primario() {                                    // PRIMARIO -> NUMERO | BOOLEANO | STRING | CHAMA_ID | len '(' IDENTIFICADOR ')' | INPUT | LISTA_DECLARACAO | '(' PRIMARIO_AUX
+End primario() {                                    // PRIMARIO -> NUMERO | BOOLEANO | STRING | CHAMA_ID | len '(' IDENTIFICADOR ')' | INPUT | LISTA_DECLARACAO | '(' PRIMARIO_AUX
     if (lookahead.tipo == NUMERO) {
+
+        End end;                                     // G.C.I.: Salva lexema do end antes do consome()
+        strcpy(end.lexema, lookahead.lexema);
+        strcpy(end.tipo, "INT");                     // G.C.I.: Tipo INT
+
         consome(NUMERO);
+
+        return end;                                  // G.C.I.: Passa end "para cima"
+
     } else if (lookahead.tipo == BOOLEANO) {
+
+        End end;                                     // G.C.I.: Salva lexema do end antes do consome()
+        strcpy(end.lexema, lookahead.lexema);
+        strcpy(end.tipo, "BOOL");                     // G.C.I.: Tipo BOOL
+
         consome(BOOLEANO);
+
+        return end;                                  // G.C.I.: Passa end "para cima"
+
     } else if (lookahead.tipo == STRING) {
+
+        // ---------------- ANÁLISE SEMÂNTICA ----------------
+        semantico_proibir_strings();
+        // ---------------------------------------------------
+
+        // --------------- ÚNICA EXCEÇÃO: PRINT ---------------
+        End end;                                     // G.C.I.: Salva lexema do end antes do consome()
+        strcpy(end.lexema, lookahead.lexema);
+        strcpy(end.tipo, "STRING");                  // G.C.I.: Tipo STRING (EXCESSÃO)
+
         consome(STRING);
+
+        return end;                                  // G.C.I.: Passa end "para cima"
+        // ---------------------------------------------------
+
     } else if (lookahead.tipo == IDENTIFICADOR) {
-        chama_id();
+        End end = chama_id();                          // G.C.I.: Solicita end
+        return end;                                    // G.C.I.: Passa end "para cima"
     } else if (lookahead.tipo == LEN) {
         consome(LEN);
         consome(ABRE_PAR);
+
+        End end;                                         // G.C.I.: Salva lexema do end antes do consome()
+        strcpy(end.lexema, lookahead.lexema);
+        end.tipo[0] = '\0';                              // G.C.I.: "Flag" para tipo "nulo"
+        
         consome(IDENTIFICADOR);
+
+        // ------- ANÁLISE SEMÂNTICA --------
+        end = semantico_validar_chamada(end);            // G.C.I.: Atualiza o end com o seu tipo guardado na minitabela
+        // ----------------------------------
+
+        
         consome(FECHA_PAR);
+        
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, "INT");                   // G.C.I.: O tipo de um len é sempre INT
+        
+        fprintf(instrucoes, "%s = len %s\n", end_t.lexema, end.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = len end"
+        
+        return end_t;                                // G.C.I.: Passa end_t "para cima"
+
     } else if (lookahead.tipo == ABRE_COL) {
         lista_declaracao();
+
+        // G.C.I.: FACILITAÇÃO PARA O CASO DE DECLARAÇÃO DE LISTAS E TUPLAS --------------
+        return conjunto_sendo_declarado;               // G.C.I.: Passa end "para cima" // (Explicação detalhada no nosso README)
+        // -------------------------------------------------------------------------------
+
     } else if (lookahead.tipo == INPUT) {
         input();
     } else if (lookahead.tipo == ABRE_PAR) {
         consome(ABRE_PAR);
         primario_aux();
+
+        // G.C.I.: FACILITAÇÃO PARA O CASO DE DECLARAÇÃO DE LISTAS E TUPLAS --------------
+        return conjunto_sendo_declarado;               // G.C.I.: Passa end "para cima" // (Explicação detalhada no nosso README)
+        // -------------------------------------------------------------------------------
+
     } else {
         erro_sintatico("Esperado número, booleano, string, chamada de ID, len, lista, expressão entre parênteses ou tupla"); // ERRO SINTÁTICO
     }
 }
 
 void primario_aux() {                                // PRIMARIO_AUX -> ')' | EXPRESSAO TUPLA
-    if (lookahead.tipo == ABRE_PAR) {
-        consome(ABRE_PAR);
+    if (lookahead.tipo == FECHA_PAR) {
+        consome(FECHA_PAR);
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
         expressao();
         tupla();
@@ -809,21 +1309,56 @@ void primario_aux() {                                // PRIMARIO_AUX -> ')' | EX
     }
 }
 
-void chama_id() {                                    // CHAMA_ID -> IDENTIFICADOR CHAMA_ID_AUX
+End chama_id() {                                     // CHAMA_ID -> IDENTIFICADOR CHAMA_ID_AUX
+
+    End end;                                         // G.C.I.: Salva lexema do end antes do consome()
+    strcpy(end.lexema, lookahead.lexema);
+    end.tipo[0] = '\0';                              // G.C.I.: "Flag" para tipo "nulo"
+
     consome(IDENTIFICADOR);
-    chama_id_aux();
+
+    // ------- ANÁLISE SEMÂNTICA --------
+    end = semantico_validar_chamada(end);            // G.C.I.: Atualiza o end com o seu tipo guardado na minitabela
+    // ----------------------------------
+
+    return chama_id_aux(end);                        // G.C.I.: Passa end "para baixo" E passa o end resultante "para cima"
 }
 
-void chama_id_aux() {                                // CHAMA_ID_AUX -> '[' EXPRESSAO ']' | '(' CHAMADA_FUNCAO_AUX | ε
+End chama_id_aux(End end_esquerda) {                 // CHAMA_ID_AUX -> '[' EXPRESSAO ']' | '(' CHAMADA_FUNCAO_AUX | ε
     if (lookahead.tipo == ABRE_COL) {
         consome(ABRE_COL);
-        expressao();
+
+        End end_direita = expressao();               // G.C.I.: Solicita end_direita
+
         consome(FECHA_COL);
+
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        end_t.tipo[0] = '\0';                        // G.C.I.: "Flag" para tipo "nulo"
+
+        // ------------------------ ANÁLISE SEMÂNTICA ------------------------
+        end_t = semantico_validar_indexacao(end_esquerda, end_direita, end_t); // G.C.I.: Atualiza o end_t com o seu tipo guardado na minitabela
+        // -------------------------------------------------------------------
+
+        fprintf(instrucoes, "%s = %s[%s]\n", end_t.lexema, end_esquerda.lexema, end_direita.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda[end_direita]"
+        
+        return end_t;
+
     } else if (lookahead.tipo == ABRE_PAR) {
         consome(ABRE_PAR);
-        chamada_funcao_aux();
+
+        chamada_funcao_aux(end_esquerda);            // G.C.I.: Passa end_esquerda "para baixo"
+        
+        End end_t;                                   // G.C.I.: Cria o nome temporário para escrever a instruçõa
+        sprintf(end_t.lexema, "t%d", proximo_rotulo_t()); // G.C.I.: Cria o lexema com proximo_rotulo_t()
+        strcpy(end_t.tipo, "INT");                   // G.C.I.: FACILITAÇÃO: ASSUME QUE FUNÇÕES APENAS RETORNAM INT
+
+        fprintf(instrucoes, "%s = %s\n", end_t.lexema, end_esquerda.lexema); // G.C.I.: Escreve no arquivo a instrução "end_t = end_esquerda"
+        
+        return end_t; 
     }
     //                                               // CHAMA_ID_AUX -> ε
+    return end_esquerda;                             // G.C.I.: Faz nada e retorna end_esquerda como estava antes
 }
 
 void lista_declaracao() {                            // LISTA_DECLARACAO -> '[' LISTA_DECLARACAO_AUX
@@ -835,68 +1370,198 @@ void lista_declaracao_aux() {                        // LISTA_DECLARACAO_AUX -> 
     if (lookahead.tipo == FECHA_COL) {
         consome(FECHA_COL);
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        lista_argumentos();
+        
+        int indice_atual = 0;                        // G.C.I.: Declaração de vetor começa no índice 0
+        int flag_vetor = 1;                          // G.C.I.: Flag de que é vetor 
+        
+        lista_argumentos(indice_atual, flag_vetor);  // G.C.I.: Passa indice_atual e flag_vetor "para baixo"
+
         consome(FECHA_COL);
     } else {
         erro_sintatico("Esperado ']' ou expressão"); // ERRO SINTÁTICO
     }
 }
 
-void op_comp() {                                     // OP_COMP -> '==' | '!=' | '<>' | '<' | '>' | '<=' | '>=' | is | in
+Op op_comp() {                                       // OP_COMP -> '==' | '!=' | '<>' | '<' | '>' | '<=' | '>=' | is | in
     if (lookahead.tipo == IGUAL) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é ==)
+        strcpy(op.lexema, "==");
+
         consome(IGUAL);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == DIFERENTE) {        // PS: Tanto '!=' quanto'<>' são considerados operadores de diferente
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome()
+        strcpy(op.lexema, lookahead.lexema);
+
         consome(DIFERENTE);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == MENOR) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é <)
+        strcpy(op.lexema, "<");
+
         consome(MENOR);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
     } else if (lookahead.tipo == MAIOR) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é >)
+        strcpy(op.lexema, ">");
+
         consome(MAIOR);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == MENOR_IGUAL) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é <=)
+        strcpy(op.lexema, "<=");
+
         consome(MENOR_IGUAL);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == MAIOR_IGUAL) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é >=)
+        strcpy(op.lexema, ">=");
+
         consome(MAIOR_IGUAL);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == IS) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é is)
+        strcpy(op.lexema, "is");
+
         consome(IS);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == IN) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é in)
+        strcpy(op.lexema, "in");
+
         consome(IN);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else {
         erro_sintatico("Esperado operador de comparação"); // ERRO SINTÁTICO
     }
 }
 
-void op_soma() {                                     // OP_SOMA -> '+' | '-'
+Op op_soma() {                                       // OP_SOMA -> '+' | '-'
     if (lookahead.tipo == SOMA) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é +)
+        strcpy(op.lexema, "+");
+
         consome(SOMA);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == SUB) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é -)
+        strcpy(op.lexema, "-");
+
         consome(SUB);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else {
         erro_sintatico("Esperado '+' ou '-'"); // ERRO SINTÁTICO
     }
 }
 
-void op_mult() {                                     // OP_MULT -> '*' | '/' | '%' | '**'
+Op op_mult() {                                     // OP_MULT -> '*' | '/' | '%' | '**'
     if (lookahead.tipo == MULT) {
+        
+        Op op;                                     // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é *)
+        strcpy(op.lexema, "*");
+
         consome(MULT);
+
+        return op;                                 // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == DIV) {
+
+        Op op;                                     // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é /)
+        strcpy(op.lexema, "/");
+
         consome(DIV);
+
+        return op;                                 // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == MOD) {
+
+        Op op;                                     // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é %)
+        strcpy(op.lexema, "%");
+
         consome(MOD);
+
+        return op;                                 // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == EXP) {
+
+        Op op;                                     // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é **)
+        strcpy(op.lexema, "**");
+
         consome(EXP);
+
+        return op;                                 // G.C.I.: Passa op "para cima"
+
     } else {
         erro_sintatico("Esperado '*', '/', '%' ou '**'"); // ERRO SINTÁTICO
     }
 }
 
-void op_unico() {                                    // OP_UNICO -> '+' | '-' | '~' | not
+Op op_unico() {                                    // OP_UNICO -> '+' | '-' | '~' | not
     if (lookahead.tipo == SOMA) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é +)
+        strcpy(op.lexema, "+");
+
         consome(SOMA);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == SUB) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é -)
+        strcpy(op.lexema, "-");
+
         consome(SUB);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == BIT_NOT) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é ~)
+        strcpy(op.lexema, "~");
+
         consome(BIT_NOT);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else if (lookahead.tipo == NOT) {
+
+        Op op;                                       // G.C.I.: Salva lexema do op antes do consome() (apesar de que, nesse caso, já sabemos que é not)
+        strcpy(op.lexema, "not");
+
         consome(NOT);
+
+        return op;                                   // G.C.I.: Passa op "para cima"
+
     } else {
         erro_sintatico("Esperado '+', '-', '~' ou 'not'"); // ERRO SINTÁTICO
     }
@@ -917,7 +1582,12 @@ void tupla_aux() {                                   // TUPLA_AUX -> ')' | LISTA
     if (lookahead.tipo == FECHA_PAR) {
         consome(FECHA_PAR);
     } else if (lookahead.tipo == NUMERO || lookahead.tipo == BOOLEANO || lookahead.tipo == STRING || lookahead.tipo == IDENTIFICADOR || lookahead.tipo == LEN || lookahead.tipo == ABRE_COL || lookahead.tipo == ABRE_PAR || lookahead.tipo == SOMA || lookahead.tipo == SUB || lookahead.tipo == BIT_NOT || lookahead.tipo == NOT) {
-        lista_argumentos();
+       
+        int indice_atual = 0;                        // G.C.I.: Declaração de tupla começa no índice 0
+        int flag_tupla = 0;                          // G.C.I.: Flag de que é tupla 
+
+        lista_argumentos(indice_atual, flag_tupla);  // G.C.I.: Passa indice_atual e flag_tupla "para baixo"
+
         consome(FECHA_PAR);
     } else {
         erro_sintatico("Esperado ')' ou expressão"); // ERRO SINTÁTICO
