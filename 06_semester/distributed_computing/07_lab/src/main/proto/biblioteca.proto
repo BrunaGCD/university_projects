@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "br.mackenzie.biblioteca";
+option java_outer_classname = "BibliotecaProto";
+
+
+
+
+// ============================================================================
+//                      SERVIÇO PRINCIPAL DA BIBLIOTECA
+// ============================================================================
+
+service BibliotecaService {
+  rpc CadastrarLivro (LivroRequest) returns (LivroResponse);
+
+  rpc ListarLivrosPorAutor (AutorRequest) returns (stream Livro);
+
+  rpc RegistrarEmprestimos (stream EmprestimoRequest) returns (ResumoEmprestimoResponse);
+
+  rpc ChatBibliotecario (stream ChatMessage) returns (stream ChatMessage);
+}
+
+
+
+
+// ============================================================================
+//                              MODELOS DE DADOS
+// ============================================================================
+
+// -------------------------------- Unary -------------------------------------
+message LivroRequest {
+  string titulo = 1;
+  string autor = 2;
+  int32 ano = 3;
+  string isbn = 4;
+}
+
+message LivroResponse {
+  string id = 1;
+  string status = 2;
+}
+
+// ---------------------------- Server Streaming ------------------------------
+message AutorRequest {
+  string autor = 1;
+}
+
+message Livro {
+  string id = 1;
+  string titulo = 2;
+  string autor = 3;
+  int32 ano = 4;
+  string isbn = 5;
+}
+
+// ---------------------------- Client Streaming ------------------------------
+message EmprestimoRequest {
+  string usuario = 1;
+  string livro_id = 2;
+}
+
+message ResumoEmprestimoResponse {
+  int32 total_emprestimos = 1;
+  string tempo_processamento = 2;
+}
+
+// ------------------------- Bidirectional Streaming --------------------------
+message ChatMessage {
+  string usuario = 1;
+  string mensagem = 2;
+}
